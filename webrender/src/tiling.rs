@@ -12,7 +12,7 @@ use internal_types::SourceTexture;
 use mask_cache::MaskCacheInfo;
 use prim_store::{CLIP_DATA_GPU_BLOCKS, DeferredResolve, ImagePrimitiveKind, PrimitiveCacheKey};
 use prim_store::{PrimitiveIndex, PrimitiveKind, PrimitiveMetadata, PrimitiveStore};
-use profiler::FrameProfileCounters;
+//use profiler::FrameProfileCounters;
 use render_task::{AlphaRenderItem, MaskGeometryKind, MaskSegment, RenderTask, RenderTaskData};
 use render_task::{RenderTaskId, RenderTaskIndex, RenderTaskKey, RenderTaskKind};
 use render_task::RenderTaskLocation;
@@ -34,6 +34,13 @@ use webrender_traits::{TileOffset, WorldToLayerTransform, YuvColorSpace, YuvForm
 // a dummy task that doesn't mask out anything.
 const OPAQUE_TASK_INDEX: RenderTaskIndex = RenderTaskIndex(i32::MAX as usize);
 
+use gfx::memory::Pod;
+
+macro_rules! impl_pod {
+    ( ty = $($ty:ty)* ) => { $( unsafe impl Pod for $ty {} )* };
+}
+
+impl_pod! { ty = PackedLayer RenderTaskData }
 
 pub type DisplayListMap = HashMap<PipelineId,
                                   BuiltDisplayList,
@@ -207,7 +214,7 @@ impl BatchList {
             BlendMode::None => {
                 (&mut self.opaque_batches, false)
             }
-            BlendMode::Alpha | BlendMode::PremultipliedAlpha | BlendMode::Subpixel(..) => {
+            BlendMode::Alpha | BlendMode::PremultipliedAlpha | BlendMode::Subpixel(..) | BlendMode::Multiply | BlendMode::Max => {
                 (&mut self.alpha_batches, true)
             }
         };
@@ -1345,10 +1352,10 @@ fn textures_compatible(t1: SourceTexture, t2: SourceTexture) -> bool {
 // All Packed Primitives below must be 16 byte aligned.
 #[derive(Debug)]
 pub struct BlurCommand {
-    task_id: i32,
-    src_task_id: i32,
-    blur_direction: i32,
-    padding: i32,
+    pub task_id: i32,
+    pub src_task_id: i32,
+    pub blur_direction: i32,
+    pub padding: i32,
 }
 
 /// A clipping primitive drawn into the clipping mask.
@@ -1356,17 +1363,17 @@ pub struct BlurCommand {
 /// way `address` is treated.
 #[derive(Clone, Copy, Debug)]
 pub struct CacheClipInstance {
-    task_id: i32,
-    layer_index: i32,
-    address: i32,
-    segment: i32,
-    resource_address: i32,
+    pub task_id: i32,
+    pub layer_index: i32,
+    pub address: i32,
+    pub segment: i32,
+    pub resource_address: i32,
 }
 
 // 32 bytes per instance should be enough for anyone!
 #[derive(Debug, Clone)]
 pub struct PrimitiveInstance {
-    data: [i32; 8],
+    pub data: [i32; 8],
 }
 
 struct SimplePrimitiveInstance {
@@ -1706,7 +1713,7 @@ pub struct Frame {
     pub device_pixel_ratio: f32,
     pub cache_size: DeviceUintSize,
     pub passes: Vec<RenderPass>,
-    pub profile_counters: FrameProfileCounters,
+    //pub profile_counters: FrameProfileCounters,
 
     pub layer_texture_data: Vec<PackedLayer>,
     pub render_task_data: Vec<RenderTaskData>,
@@ -1754,4 +1761,3 @@ fn resolve_image(image_key: ImageKey,
         }
     }
 }
-

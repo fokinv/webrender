@@ -7,7 +7,7 @@ use device::TextureFilter;
 use fnv::FnvHasher;
 use frame::FrameId;
 use platform::font::{FontContext, RasterizedGlyph};
-use profiler::TextureCacheProfileCounters;
+//use profiler::TextureCacheProfileCounters;
 use rayon::ThreadPool;
 use rayon::prelude::*;
 use resource_cache::ResourceClassCache;
@@ -231,7 +231,7 @@ impl GlyphRasterizer {
         glyph_cache: &mut GlyphCache,
         texture_cache: &mut TextureCache,
         requested_items: &mut HashSet<TextureCacheItemId, BuildHasherDefault<FnvHasher>>,
-        texture_cache_profile: &mut TextureCacheProfileCounters,
+        //texture_cache_profile: &mut TextureCacheProfileCounters,
     ) {
         let mut rasterized_glyphs = Vec::with_capacity(self.pending_glyphs.len());
 
@@ -273,7 +273,7 @@ impl GlyphRasterizer {
                         TextureFilter::Linear,
                         ImageData::Raw(Arc::new(glyph.bytes)),
                         [glyph.left, glyph.top],
-                        texture_cache_profile,
+                        //texture_cache_profile,
                     );
                     requested_items.insert(image_id);
                     Some(image_id)
@@ -400,6 +400,6 @@ fn raterize_200_glyphs() {
         &mut glyph_cache,
         &mut TextureCache::new(4096),
         &mut requested_items,
-        &mut TextureCacheProfileCounters::new(),
+        //&mut TextureCacheProfileCounters::new(),
     );
 }

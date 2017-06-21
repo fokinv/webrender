@@ -6,7 +6,7 @@ use frame::Frame;
 use frame_builder::FrameBuilderConfig;
 use gpu_cache::GpuCache;
 use internal_types::{SourceTexture, ResultMsg, RendererFrame};
-use profiler::{BackendProfileCounters, GpuCacheProfileCounters, TextureCacheProfileCounters};
+//use profiler::{BackendProfileCounters, GpuCacheProfileCounters, TextureCacheProfileCounters};
 use record::ApiRecordingReceiver;
 use resource_cache::ResourceCache;
 use scene::Scene;
@@ -125,18 +125,18 @@ impl RenderBackend {
         }
     }
 
-    fn scroll_frame(&mut self, frame_maybe: Option<RendererFrame>,
-                    profile_counters: &mut BackendProfileCounters) {
+    fn scroll_frame(&mut self, frame_maybe: Option<RendererFrame>/*,
+                    profile_counters: &mut BackendProfileCounters*/) {
         match frame_maybe {
             Some(frame) => {
-                self.publish_frame(frame, profile_counters);
+                self.publish_frame(frame/*, profile_counters*/);
                 self.notify_compositor_of_new_scroll_frame(true)
             }
             None => self.notify_compositor_of_new_scroll_frame(false),
         }
     }
 
-    pub fn run(&mut self, mut profile_counters: BackendProfileCounters) {
+    pub fn run(&mut self/*, mut profile_counters: BackendProfileCounters*/) {
         let mut frame_counter: u32 = 0;
 
         loop {
@@ -149,7 +149,7 @@ impl RenderBackend {
                     }
                     match msg {
                         ApiMsg::AddRawFont(id, bytes, index) => {
-                            profile_counters.resources.font_templates.inc(bytes.len());
+                            //profile_counters.resources.font_templates.inc(bytes.len());
                             self.resource_cache
                                 .add_font_template(id, FontTemplate::Raw(Arc::new(bytes), index));
                         }
@@ -170,7 +170,7 @@ impl RenderBackend {
                         }
                         ApiMsg::AddImage(id, descriptor, data, tiling) => {
                             if let ImageData::Raw(ref bytes) = data {
-                                profile_counters.resources.image_templates.inc(bytes.len());
+                                //profile_counters.resources.image_templates.inc(bytes.len());
                             }
                             self.resource_cache.add_image_template(id, descriptor, data, tiling);
                         }
@@ -241,7 +241,7 @@ impl RenderBackend {
 
                             let display_list_received_time = precise_time_ns();
 
-                            profile_counters.total_time.profile(|| {
+                            //profile_counters.total_time.profile(|| {
                                 self.scene.set_display_list(pipeline_id,
                                                             epoch,
                                                             built_display_list,
@@ -249,7 +249,7 @@ impl RenderBackend {
                                                             viewport_size,
                                                             content_size);
                                 self.build_scene();
-                            });
+                            //});
 
                             self.render_on_scroll = false; //wait for `GenerateFrame`
 
@@ -258,9 +258,9 @@ impl RenderBackend {
                             // really simple and cheap to access, so it's not a big deal.
                             let display_list_consumed_time = precise_time_ns();
 
-                            profile_counters.ipc.set(builder_start_time, builder_finish_time,
-                                                     display_list_received_time, display_list_consumed_time,
-                                                     display_list_len);
+                            //profile_counters.ipc.set(builder_start_time, builder_finish_time,
+                            //                         display_list_received_time, display_list_consumed_time,
+                            //                         display_list_len);
                         }
                         ApiMsg::SetRootPipeline(pipeline_id) => {
                             profile_scope!("SetRootPipeline");
@@ -270,58 +270,58 @@ impl RenderBackend {
                                 continue;
                             }
 
-                            profile_counters.total_time.profile(|| {
+                            //profile_counters.total_time.profile(|| {
                                 self.build_scene();
-                            })
+                            //})
                         }
                         ApiMsg::Scroll(delta, cursor, move_phase) => {
                             profile_scope!("Scroll");
                             let frame = {
-                                let counters = &mut profile_counters.resources.texture_cache;
-                                let gpu_cache_counters = &mut profile_counters.resources.gpu_cache;
-                                profile_counters.total_time.profile(|| {
+                                //let counters = &mut profile_counters.resources.texture_cache;
+                                //let gpu_cache_counters = &mut profile_counters.resources.gpu_cache;
+                                //profile_counters.total_time.profile(|| {
                                     if self.frame.scroll(delta, cursor, move_phase) && self.render_on_scroll {
-                                        Some(self.render(counters, gpu_cache_counters))
+                                        Some(self.render(/*counters, gpu_cache_counters*/))
                                     } else {
                                         None
                                     }
-                                })
+                                //})
                             };
 
-                            self.scroll_frame(frame, &mut profile_counters);
+                            self.scroll_frame(frame/*, &mut profile_counters*/);
                         }
                         ApiMsg::ScrollNodeWithId(origin, id, clamp) => {
                             profile_scope!("ScrollNodeWithScrollId");
                             let frame = {
-                                let counters = &mut profile_counters.resources.texture_cache;
-                                let gpu_cache_counters = &mut profile_counters.resources.gpu_cache;
-                                profile_counters.total_time.profile(|| {
+                                //let counters = &mut profile_counters.resources.texture_cache;
+                                //let gpu_cache_counters = &mut profile_counters.resources.gpu_cache;
+                                //profile_counters.total_time.profile(|| {
                                     if self.frame.scroll_node(origin, id, clamp) && self.render_on_scroll {
-                                        Some(self.render(counters, gpu_cache_counters))
+                                        Some(self.render(/*counters, gpu_cache_counters*/))
                                     } else {
                                         None
                                     }
-                                })
+                                //})
                             };
 
-                            self.scroll_frame(frame, &mut profile_counters);
+                            self.scroll_frame(frame/*, &mut profile_counters*/);
                         }
                         ApiMsg::TickScrollingBounce => {
                             profile_scope!("TickScrollingBounce");
                             let frame = {
-                                let counters = &mut profile_counters.resources.texture_cache;
-                                let gpu_cache_counters = &mut profile_counters.resources.gpu_cache;
-                                profile_counters.total_time.profile(|| {
+                                //let counters = &mut profile_counters.resources.texture_cache;
+                                //let gpu_cache_counters = &mut profile_counters.resources.gpu_cache;
+                                //profile_counters.total_time.profile(|| {
                                     self.frame.tick_scrolling_bounce_animations();
                                     if self.render_on_scroll {
-                                        Some(self.render(counters, gpu_cache_counters))
+                                        Some(self.render(/*counters, gpu_cache_counters*/))
                                     } else {
                                         None
                                     }
-                                })
+                                //})
                             };
 
-                            self.scroll_frame(frame, &mut profile_counters);
+                            self.scroll_frame(frame/*, &mut profile_counters*/);
                         }
                         ApiMsg::TranslatePointToLayerSpace(..) => {
                             panic!("unused api - remove from webrender_traits");
@@ -420,22 +420,22 @@ impl RenderBackend {
                             //           rebuild of the frame!
                             if let Some(property_bindings) = property_bindings {
                                 self.scene.properties.set_properties(property_bindings);
-                                profile_counters.total_time.profile(|| {
+                                //profile_counters.total_time.profile(|| {
                                     self.build_scene();
-                                });
+                                //});
                             }
 
                             self.render_on_scroll = true;
 
                             let frame = {
-                                let counters = &mut profile_counters.resources.texture_cache;
-                                let gpu_cache_counters = &mut profile_counters.resources.gpu_cache;
-                                profile_counters.total_time.profile(|| {
-                                    self.render(counters, gpu_cache_counters)
-                                })
+                                //let counters = &mut profile_counters.resources.texture_cache;
+                                //let gpu_cache_counters = &mut profile_counters.resources.gpu_cache;
+                                //profile_counters.total_time.profile(|| {
+                                    self.render(/*counters, gpu_cache_counters*/)
+                                //})
                             };
                             if self.scene.root_pipeline_id.is_some() {
-                                self.publish_frame_and_notify_compositor(frame, &mut profile_counters);
+                                self.publish_frame_and_notify_compositor(frame/*, &mut profile_counters*/);
                                 frame_counter += 1;
                             }
                         }
@@ -504,9 +504,9 @@ impl RenderBackend {
                           accumulated_scale_factor);
     }
 
-    fn render(&mut self,
+    fn render(&mut self/*,
               texture_cache_profile: &mut TextureCacheProfileCounters,
-              gpu_cache_profile: &mut GpuCacheProfileCounters)
+              gpu_cache_profile: &mut GpuCacheProfileCounters*/)
               -> RendererFrame {
         let accumulated_scale_factor = self.accumulated_scale_factor();
         let pan = LayerPoint::new(self.pan.x as f32 / accumulated_scale_factor,
@@ -515,25 +515,25 @@ impl RenderBackend {
                                      &mut self.gpu_cache,
                                      &self.scene.display_lists,
                                      accumulated_scale_factor,
-                                     pan,
+                                     pan/*,
                                      texture_cache_profile,
-                                     gpu_cache_profile);
+                                     gpu_cache_profile*/);
         frame
     }
 
     fn publish_frame(&mut self,
-                     frame: RendererFrame,
-                     profile_counters: &mut BackendProfileCounters) {
+                     frame: RendererFrame/*,
+                     profile_counters: &mut BackendProfileCounters*/) {
         let pending_update = self.resource_cache.pending_updates();
-        let msg = ResultMsg::NewFrame(frame, pending_update, profile_counters.clone());
+        let msg = ResultMsg::NewFrame(frame, pending_update/*, profile_counters.clone()*/);
         self.result_tx.send(msg).unwrap();
-        profile_counters.reset();
+        //profile_counters.reset();
     }
 
     fn publish_frame_and_notify_compositor(&mut self,
-                                           frame: RendererFrame,
-                                           profile_counters: &mut BackendProfileCounters) {
-        self.publish_frame(frame, profile_counters);
+                                           frame: RendererFrame/*,
+                                           profile_counters: &mut BackendProfileCounters*/) {
+        self.publish_frame(frame/*, profile_counters*/);
 
         // TODO(gw): This is kindof bogus to have to lock the notifier
         //           each time it's used. This is due to some nastiness

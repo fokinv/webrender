@@ -13,7 +13,7 @@ use prim_store::{ImagePrimitiveKind, PrimitiveContainer, PrimitiveIndex};
 use prim_store::{PrimitiveStore, RadialGradientPrimitiveCpu};
 use prim_store::{RectanglePrimitive, TextRunPrimitiveCpu};
 use prim_store::{BoxShadowPrimitiveCpu, TexelRect, YuvImagePrimitiveCpu};
-use profiler::{FrameProfileCounters, GpuCacheProfileCounters, TextureCacheProfileCounters};
+//use profiler::{FrameProfileCounters, GpuCacheProfileCounters, TextureCacheProfileCounters};
 use render_task::{AlphaRenderItem, ClipWorkItem, MaskCacheKey, RenderTask, RenderTaskIndex};
 use render_task::{RenderTaskId, RenderTaskLocation};
 use resource_cache::ResourceCache;
@@ -1104,7 +1104,7 @@ impl FrameBuilder {
                                                 display_lists: &DisplayListMap,
                                                 resource_cache: &mut ResourceCache,
                                                 gpu_cache: &mut GpuCache,
-                                                profile_counters: &mut FrameProfileCounters,
+                                                //profile_counters: &mut FrameProfileCounters,
                                                 device_pixel_ratio: f32) {
         profile_scope!("cull");
         LayerRectCalculationAndCullingPass::create_and_run(self,
@@ -1113,7 +1113,7 @@ impl FrameBuilder {
                                                            display_lists,
                                                            resource_cache,
                                                            gpu_cache,
-                                                           profile_counters,
+                                                           //profile_counters,
                                                            device_pixel_ratio);
     }
 
@@ -1378,14 +1378,14 @@ impl FrameBuilder {
                  frame_id: FrameId,
                  clip_scroll_tree: &mut ClipScrollTree,
                  display_lists: &DisplayListMap,
-                 device_pixel_ratio: f32,
+                 device_pixel_ratio: f32/*,
                  texture_cache_profile: &mut TextureCacheProfileCounters,
-                 gpu_cache_profile: &mut GpuCacheProfileCounters)
+                 gpu_cache_profile: &mut GpuCacheProfileCounters*/)
                  -> Frame {
         profile_scope!("build");
 
-        let mut profile_counters = FrameProfileCounters::new();
-        profile_counters.total_primitives.set(self.prim_store.prim_count());
+        //let mut profile_counters = FrameProfileCounters::new();
+        //profile_counters.total_primitives.set(self.prim_store.prim_count());
 
         resource_cache.begin_frame(frame_id);
         gpu_cache.begin_frame();
@@ -1409,7 +1409,7 @@ impl FrameBuilder {
                                                       display_lists,
                                                       resource_cache,
                                                       gpu_cache,
-                                                      &mut profile_counters,
+                                                      //&mut profile_counters,
                                                       device_pixel_ratio);
 
         let (main_render_task, static_render_task_count) = self.build_render_task(clip_scroll_tree, gpu_cache);
@@ -1418,7 +1418,7 @@ impl FrameBuilder {
         let mut required_pass_count = 0;
         main_render_task.max_depth(0, &mut required_pass_count);
 
-        resource_cache.block_until_all_resources_added(gpu_cache, texture_cache_profile);
+        resource_cache.block_until_all_resources_added(gpu_cache/*, texture_cache_profile*/);
 
         let mut deferred_resolves = vec![];
 
@@ -1445,12 +1445,12 @@ impl FrameBuilder {
 
             pass.build(&ctx, gpu_cache, &mut render_tasks, &mut deferred_resolves);
 
-            profile_counters.passes.inc();
-            profile_counters.color_targets.add(pass.color_targets.target_count());
-            profile_counters.alpha_targets.add(pass.alpha_targets.target_count());
+            //profile_counters.passes.inc();
+            //profile_counters.color_targets.add(pass.color_targets.target_count());
+            //profile_counters.alpha_targets.add(pass.alpha_targets.target_count());
         }
 
-        let gpu_cache_updates = gpu_cache.end_frame(gpu_cache_profile);
+        let gpu_cache_updates = gpu_cache.end_frame(/*gpu_cache_profile*/);
 
         resource_cache.end_frame();
 
@@ -1458,7 +1458,7 @@ impl FrameBuilder {
             device_pixel_ratio: device_pixel_ratio,
             background_color: self.background_color,
             window_size: self.screen_size,
-            profile_counters: profile_counters,
+            //profile_counters: profile_counters,
             passes: passes,
             cache_size: cache_size,
             layer_texture_data: self.packed_layers.clone(),
@@ -1483,7 +1483,7 @@ struct LayerRectCalculationAndCullingPass<'a> {
     display_lists: &'a DisplayListMap,
     resource_cache: &'a mut ResourceCache,
     gpu_cache: &'a mut GpuCache,
-    profile_counters: &'a mut FrameProfileCounters,
+    //profile_counters: &'a mut FrameProfileCounters,
     device_pixel_ratio: f32,
     stacking_context_stack: Vec<StackingContextIndex>,
 
@@ -1504,7 +1504,7 @@ impl<'a> LayerRectCalculationAndCullingPass<'a> {
                       display_lists: &'a DisplayListMap,
                       resource_cache: &'a mut ResourceCache,
                       gpu_cache: &'a mut GpuCache,
-                      profile_counters: &'a mut FrameProfileCounters,
+                      //profile_counters: &'a mut FrameProfileCounters,
                       device_pixel_ratio: f32) {
 
         let mut pass = LayerRectCalculationAndCullingPass {
@@ -1514,7 +1514,7 @@ impl<'a> LayerRectCalculationAndCullingPass<'a> {
             display_lists: display_lists,
             resource_cache: resource_cache,
             gpu_cache: gpu_cache,
-            profile_counters: profile_counters,
+            //profile_counters: profile_counters,
             device_pixel_ratio: device_pixel_ratio,
             stacking_context_stack: Vec::new(),
             current_clip_stack: Vec::new(),
@@ -1838,7 +1838,7 @@ impl<'a> LayerRectCalculationAndCullingPass<'a> {
                                                                extra)
             }
 
-            self.profile_counters.visible_primitives.inc();
+            //self.profile_counters.visible_primitives.inc();
         }
     }
 }

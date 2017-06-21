@@ -4,7 +4,6 @@
 
 use euclid::Transform3D;
 use fnv::FnvHasher;
-use gleam::gl;
 use internal_types::{PackedVertex, RenderTargetMode, TextureSampler, DEFAULT_TEXTURE};
 use internal_types::{BlurAttribute, ClipAttribute, VertexAttribute};
 use internal_types::{DebugFontVertex, DebugColorVertex};
@@ -25,6 +24,148 @@ use std::rc::Rc;
 use webrender_traits::{ColorF, ImageFormat};
 use webrender_traits::{DeviceIntPoint, DeviceIntRect, DeviceIntSize, DeviceUintSize};
 
+use euclid::Matrix4D;
+
+use rand::Rng;
+use std;
+use gfx;
+use gfx::memory::Typed;
+use gfx::Factory;
+use gfx::texture::Kind;
+use gfx::traits::FactoryExt;
+use gfx::format::{DepthStencil as DepthFormat, Rgba8 as ColorFormat};
+use gfx_device_gl as device_gl;
+use gfx_device_gl::{Resources as R, CommandBuffer as CB};
+use gfx::CombinedError;
+use gfx::format::{Formatted, R8, Rgba8, Rgba32F, Srgba8, SurfaceTyped, TextureChannel, TextureSurface, Unorm};
+use gfx::format::{R8_G8_B8_A8, R32_G32_B32_A32, Srgb};
+use glutin;
+use pipelines::{primitive, ClipProgram, Position, PrimitiveInstances, Program};
+use prim_store::GRADIENT_DATA_SIZE;
+use tiling::{CacheClipInstance, PrimitiveInstance};
+use renderer::{BlendMode, DITHER_ID, DUMMY_A8_ID, DUMMY_RGBA8_ID, MAX_VERTEX_TEXTURE_WIDTH};
+use webrender_traits::DeviceUintRect;
+
+pub type A8 = (R8, Unorm);
+pub const VECS_PER_DATA_16: usize = 1;
+pub const VECS_PER_DATA_32: usize = 2;
+pub const VECS_PER_DATA_64: usize = 4;
+pub const VECS_PER_DATA_128: usize = 8;
+pub const VECS_PER_GRADIENT_DATA: usize = 520;
+pub const VECS_PER_LAYER: usize = 9;
+pub const VECS_PER_PRIM_GEOM: usize = 2;
+pub const VECS_PER_RENDER_TASK: usize = 3;
+pub const VECS_PER_RESOURCE_RECTS: usize = 1;
+pub const VECS_PER_SPLIT_GEOM: usize = 3;
+pub const LAYER_TEXTURE_WIDTH: usize = 1017;
+pub const RENDER_TASK_TEXTURE_WIDTH: usize = 1023;
+pub const TEXTURE_HEIGTH: usize = 8;
+pub const DEVICE_PIXEL_RATIO: f32 = 1.0;
+pub const MAX_INSTANCE_COUNT: usize = 2000;
+
+pub const A_STRIDE: usize = 1;
+pub const RG_STRIDE: usize = 2;
+pub const RGB_STRIDE: usize = 3;
+pub const RGBA_STRIDE: usize = 4;
+pub const FIRST_UNRESERVED_ID: u32 = DITHER_ID + 1;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Texture<R, T> where R: gfx::Resources,
+                               T: gfx::format::TextureFormat {
+    /// Pixel storage for texture.
+    pub surface: gfx::handle::Texture<R, T::Surface>,
+    /// Sampler for texture.
+    pub sampler: gfx::handle::Sampler<R>,
+    /// View used by shader.
+    pub view: gfx::handle::ShaderResourceView<R, T::View>,
+    /// Filtering mode
+    pub filter: TextureFilter,
+    /// ImageFormat
+    pub format: ImageFormat,
+    /// Render Target mode
+    pub mode: RenderTargetMode,
+}
+
+impl<R, T> Texture<R, T> where R: gfx::Resources, T: gfx::format::TextureFormat {
+
+    pub fn empty<F>(factory: &mut F, size: [usize; 2], filter_method: TextureFilter, texture_kind: TextureTarget) -> Result<Texture<R, T>, CombinedError>
+        where F: gfx::Factory<R>
+    {
+        Texture::create(factory, None, size, filter_method, texture_kind)
+    }
+
+    pub fn create<F>(factory: &mut F,
+                     data: Option<&[&[u8]]>,
+                     size: [usize; 2],
+                     filter: TextureFilter,
+                     texture_kind: TextureTarget,
+    ) -> Result<Texture<R, T>, CombinedError>
+        where F: gfx::Factory<R>
+    {
+        let (width, height) = (size[0] as u16, size[1] as u16);
+        let tex_kind = match texture_kind {
+            TextureTarget::Array => Kind::D2Array(width, height, 1, gfx::texture::AaMode::Single),
+            _ => Kind::D2(width, height, gfx::texture::AaMode::Single),
+        };
+
+        let filter_method = match filter {
+            TextureFilter::Nearest => gfx::texture::FilterMethod::Scale,
+            TextureFilter::Linear => gfx::texture::FilterMethod::Bilinear,
+        };
+
+        let mut sampler_info = gfx::texture::SamplerInfo::new(
+            filter_method,
+            gfx::texture::WrapMode::Clamp
+        );
+        sampler_info.wrap_mode = (gfx::texture::WrapMode::Clamp, gfx::texture::WrapMode::Clamp, gfx::texture::WrapMode::Tile);
+
+        let (surface, view, format) = {
+            use gfx::{format, texture};
+            use gfx::memory::{Usage, SHADER_RESOURCE};
+
+            let surface = <T::Surface as format::SurfaceTyped>::get_surface_type();
+            let desc = texture::Info {
+                kind: tex_kind,
+                levels: 1,
+                format: surface,
+                bind: SHADER_RESOURCE,
+                usage: Usage::Dynamic,
+            };
+            let cty = <T::Channel as format::ChannelTyped>::get_channel_type();
+            let raw = try!(factory.create_texture_raw(desc, Some(cty), data));
+            let levels = (0, raw.get_info().levels - 1);
+            let tex = Typed::new(raw);
+            let view = try!(factory.view_texture_as_shader_resource::<T>(
+                &tex, levels, format::Swizzle::new()
+            ));
+            let format = match surface {
+                gfx::format::SurfaceType::R8 => ImageFormat::A8,
+                gfx::format::SurfaceType::R8_G8_B8_A8 | gfx::format::SurfaceType::B8_G8_R8_A8 => ImageFormat::BGRA8,
+                gfx::format::SurfaceType::R32_G32_B32_A32 => ImageFormat::RGBAF32,
+                _ => unimplemented!(),
+            };
+            (tex, view, format)
+        };
+
+        let sampler = factory.create_sampler(sampler_info);
+
+        Ok(Texture {
+            surface: surface,
+            sampler: sampler,
+            view: view,
+            filter: filter,
+            format: format,
+            mode: RenderTargetMode::None,
+        })
+    }
+
+    #[inline(always)]
+    pub fn get_size(&self) -> (usize, usize) {
+        let (w, h, _, _) = self.surface.get_info().kind.get_dimensions();
+        (w as usize, h as usize)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Ord, Eq, PartialOrd)]
 pub struct FrameId(usize);
 
@@ -42,45 +183,12 @@ impl Add<usize> for FrameId {
     }
 }
 
-#[cfg(not(any(target_arch = "arm", target_arch = "aarch64")))]
-const GL_FORMAT_A: gl::GLuint = gl::RED;
-
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-const GL_FORMAT_A: gl::GLuint = gl::ALPHA;
-
-const GL_FORMAT_BGRA_GL: gl::GLuint = gl::BGRA;
-
-const GL_FORMAT_BGRA_GLES: gl::GLuint = gl::BGRA_EXT;
-
-const SHADER_VERSION_GL: &'static str = "#version 150\n";
-
-const SHADER_VERSION_GLES: &'static str = "#version 300 es\n";
-
-static SHADER_PREAMBLE: &'static str = "shared";
-
-#[repr(u32)]
-pub enum DepthFunction {
-    Less = gl::LESS,
-    LessEqual = gl::LEQUAL,
-}
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TextureTarget {
     Default,
     Array,
-    Rect,
     External,
-}
-
-impl TextureTarget {
-    pub fn to_gl_target(&self) -> gl::GLuint {
-        match *self {
-            TextureTarget::Default => gl::TEXTURE_2D,
-            TextureTarget::Array => gl::TEXTURE_2D_ARRAY,
-            TextureTarget::Rect => gl::TEXTURE_RECTANGLE,
-            TextureTarget::External => gl::TEXTURE_EXTERNAL_OES,
-        }
-    }
+    Rect,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -89,1609 +197,271 @@ pub enum TextureFilter {
     Linear,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum VertexFormat {
-    Triangles,
-    DebugFont,
-    DebugColor,
-    Blur,
-    Clip,
-}
-
-enum FBOTarget {
-    Read,
-    Draw,
-}
-
-pub fn get_gl_format_bgra(gl: &gl::Gl) -> gl::GLuint {
-    match gl.get_type() {
-        gl::GlType::Gl => {
-            GL_FORMAT_BGRA_GL
-        }
-        gl::GlType::Gles => {
-            GL_FORMAT_BGRA_GLES
-        }
-    }
-}
-
-fn get_shader_version(gl: &gl::Gl) -> &'static str {
-    match gl.get_type() {
-        gl::GlType::Gl => {
-            SHADER_VERSION_GL
-        }
-        gl::GlType::Gles => {
-            SHADER_VERSION_GLES
-        }
-    }
-}
-
-fn get_optional_shader_source(shader_name: &str, base_path: &Option<PathBuf>) -> Option<String> {
-    if let Some(ref base) = *base_path {
-        let shader_path = base.join(&format!("{}.glsl", shader_name));
-        if shader_path.exists() {
-            let mut source = String::new();
-            File::open(&shader_path).unwrap().read_to_string(&mut source).unwrap();
-            return Some(source);
-        }
-    }
-
-    shader_source::SHADERS.get(shader_name).and_then(|s| Some((*s).to_owned()))
-}
-
-fn get_shader_source(shader_name: &str, base_path: &Option<PathBuf>) -> String {
-    get_optional_shader_source(shader_name, base_path)
-        .expect(&format!("Couldn't get required shader: {}", shader_name))
-}
-
-pub trait FileWatcherHandler : Send {
-    fn file_changed(&self, path: PathBuf);
-}
-
-impl VertexFormat {
-    fn bind(&self, gl: &gl::Gl, main: VBOId, instance: VBOId, offset: gl::GLuint, instance_stride: gl::GLint) {
-        main.bind(gl);
-
-        match *self {
-            VertexFormat::DebugFont => {
-                gl.enable_vertex_attrib_array(VertexAttribute::Position as gl::GLuint);
-                gl.enable_vertex_attrib_array(VertexAttribute::Color as gl::GLuint);
-                gl.enable_vertex_attrib_array(VertexAttribute::ColorTexCoord as gl::GLuint);
-
-                gl.vertex_attrib_divisor(VertexAttribute::Position as gl::GLuint, 0);
-                gl.vertex_attrib_divisor(VertexAttribute::Color as gl::GLuint, 0);
-                gl.vertex_attrib_divisor(VertexAttribute::ColorTexCoord as gl::GLuint, 0);
-
-                let vertex_stride = mem::size_of::<DebugFontVertex>() as gl::GLuint;
-
-                gl.vertex_attrib_pointer(VertexAttribute::Position as gl::GLuint,
-                                          2,
-                                          gl::FLOAT,
-                                          false,
-                                          vertex_stride as gl::GLint,
-                                          0 + vertex_stride * offset);
-                gl.vertex_attrib_pointer(VertexAttribute::Color as gl::GLuint,
-                                          4,
-                                          gl::UNSIGNED_BYTE,
-                                          true,
-                                          vertex_stride as gl::GLint,
-                                          8 + vertex_stride * offset);
-                gl.vertex_attrib_pointer(VertexAttribute::ColorTexCoord as gl::GLuint,
-                                          2,
-                                          gl::FLOAT,
-                                          false,
-                                          vertex_stride as gl::GLint,
-                                          12 + vertex_stride * offset);
-            }
-            VertexFormat::DebugColor => {
-                gl.enable_vertex_attrib_array(VertexAttribute::Position as gl::GLuint);
-                gl.enable_vertex_attrib_array(VertexAttribute::Color as gl::GLuint);
-
-                gl.vertex_attrib_divisor(VertexAttribute::Position as gl::GLuint, 0);
-                gl.vertex_attrib_divisor(VertexAttribute::Color as gl::GLuint, 0);
-
-                let vertex_stride = mem::size_of::<DebugColorVertex>() as gl::GLuint;
-
-                gl.vertex_attrib_pointer(VertexAttribute::Position as gl::GLuint,
-                                          2,
-                                          gl::FLOAT,
-                                          false,
-                                          vertex_stride as gl::GLint,
-                                          0 + vertex_stride * offset);
-                gl.vertex_attrib_pointer(VertexAttribute::Color as gl::GLuint,
-                                          4,
-                                          gl::UNSIGNED_BYTE,
-                                          true,
-                                          vertex_stride as gl::GLint,
-                                          8 + vertex_stride * offset);
-            }
-            VertexFormat::Triangles => {
-                let vertex_stride = mem::size_of::<PackedVertex>() as gl::GLuint;
-                gl.enable_vertex_attrib_array(VertexAttribute::Position as gl::GLuint);
-                gl.vertex_attrib_divisor(VertexAttribute::Position as gl::GLuint, 0);
-
-                gl.vertex_attrib_pointer(VertexAttribute::Position as gl::GLuint,
-                                          2,
-                                          gl::FLOAT,
-                                          false,
-                                          vertex_stride as gl::GLint,
-                                          0);
-
-                instance.bind(gl);
-                let mut offset = 0;
-
-                for &attrib in [VertexAttribute::Data0,
-                                VertexAttribute::Data1,
-                               ].into_iter() {
-                    gl.enable_vertex_attrib_array(attrib as gl::GLuint);
-                    gl.vertex_attrib_divisor(attrib as gl::GLuint, 1);
-                    gl.vertex_attrib_i_pointer(attrib as gl::GLuint,
-                                                4,
-                                                gl::INT,
-                                                instance_stride,
-                                                offset);
-                    offset += 16;
-                }
-            }
-            VertexFormat::Blur => {
-                let vertex_stride = mem::size_of::<PackedVertex>() as gl::GLuint;
-                gl.enable_vertex_attrib_array(BlurAttribute::Position as gl::GLuint);
-                gl.vertex_attrib_divisor(BlurAttribute::Position as gl::GLuint, 0);
-
-                gl.vertex_attrib_pointer(BlurAttribute::Position as gl::GLuint,
-                                          2,
-                                          gl::FLOAT,
-                                          false,
-                                          vertex_stride as gl::GLint,
-                                          0);
-
-                instance.bind(gl);
-
-                for (i, &attrib) in [BlurAttribute::RenderTaskIndex,
-                                     BlurAttribute::SourceTaskIndex,
-                                     BlurAttribute::Direction,
-                                    ].into_iter().enumerate() {
-                    gl.enable_vertex_attrib_array(attrib as gl::GLuint);
-                    gl.vertex_attrib_divisor(attrib as gl::GLuint, 1);
-                    gl.vertex_attrib_i_pointer(attrib as gl::GLuint,
-                                                1,
-                                                gl::INT,
-                                                instance_stride,
-                                                (i * 4) as gl::GLuint);
-                }
-            }
-            VertexFormat::Clip => {
-                let vertex_stride = mem::size_of::<PackedVertex>() as gl::GLuint;
-                gl.enable_vertex_attrib_array(ClipAttribute::Position as gl::GLuint);
-                gl.vertex_attrib_divisor(ClipAttribute::Position as gl::GLuint, 0);
-
-                gl.vertex_attrib_pointer(ClipAttribute::Position as gl::GLuint,
-                                          2,
-                                          gl::FLOAT,
-                                          false,
-                                          vertex_stride as gl::GLint,
-                                          0);
-
-                instance.bind(gl);
-
-                for (i, &attrib) in [ClipAttribute::RenderTaskIndex,
-                                     ClipAttribute::LayerIndex,
-                                     ClipAttribute::DataIndex,
-                                     ClipAttribute::SegmentIndex,
-                                     ClipAttribute::ResourceAddress,
-                                    ].into_iter().enumerate() {
-                    gl.enable_vertex_attrib_array(attrib as gl::GLuint);
-                    gl.vertex_attrib_divisor(attrib as gl::GLuint, 1);
-                    gl.vertex_attrib_i_pointer(attrib as gl::GLuint,
-                                                1,
-                                                gl::INT,
-                                                instance_stride,
-                                                (i * 4) as gl::GLuint);
-                }
-            }
-        }
-    }
-}
-
 impl TextureId {
-    pub fn bind(&self, gl: &gl::Gl) {
-        gl.bind_texture(self.target, self.name);
-    }
-
-    pub fn new(name: gl::GLuint, texture_target: TextureTarget) -> TextureId {
+    pub fn new(name: u32, _: TextureTarget) -> TextureId {
         TextureId {
             name: name,
-            target: texture_target.to_gl_target(),
         }
     }
 
     pub fn invalid() -> TextureId {
         TextureId {
             name: 0,
-            target: gl::TEXTURE_2D,
         }
     }
 
-    pub fn is_valid(&self) -> bool { *self != TextureId::invalid() }
-}
-
-impl ProgramId {
-    fn bind(&self, gl: &gl::Gl) {
-        gl.use_program(self.0);
-    }
-}
-
-impl VBOId {
-    fn bind(&self, gl: &gl::Gl) {
-        gl.bind_buffer(gl::ARRAY_BUFFER, self.0);
-    }
-}
-
-impl IBOId {
-    fn bind(&self, gl: &gl::Gl) {
-        gl.bind_buffer(gl::ELEMENT_ARRAY_BUFFER, self.0);
-    }
-}
-
-impl UBOId {
-    fn _bind(&self, gl: &gl::Gl) {
-        gl.bind_buffer(gl::UNIFORM_BUFFER, self.0);
-    }
-}
-
-impl FBOId {
-    fn bind(&self, gl: &gl::Gl, target: FBOTarget) {
-        let target = match target {
-            FBOTarget::Read => gl::READ_FRAMEBUFFER,
-            FBOTarget::Draw => gl::DRAW_FRAMEBUFFER,
-        };
-        gl.bind_framebuffer(target, self.0);
-    }
-}
-
-struct Texture {
-    gl: Rc<gl::Gl>,
-    id: gl::GLuint,
-    format: ImageFormat,
-    width: u32,
-    height: u32,
-    filter: TextureFilter,
-    mode: RenderTargetMode,
-    fbo_ids: Vec<FBOId>,
-}
-
-impl Drop for Texture {
-    fn drop(&mut self) {
-        if !self.fbo_ids.is_empty() {
-            let fbo_ids: Vec<_> = self.fbo_ids.iter().map(|&FBOId(fbo_id)| fbo_id).collect();
-            self.gl.delete_framebuffers(&fbo_ids[..]);
-        }
-        self.gl.delete_textures(&[self.id]);
-    }
-}
-
-struct Program {
-    gl: Rc<gl::Gl>,
-    id: gl::GLuint,
-    u_transform: gl::GLint,
-    u_device_pixel_ratio: gl::GLint,
-    name: String,
-    vs_source: String,
-    fs_source: String,
-    prefix: Option<String>,
-    vs_id: Option<gl::GLuint>,
-    fs_id: Option<gl::GLuint>,
-}
-
-impl Program {
-    fn attach_and_bind_shaders(&mut self,
-                               vs_id: gl::GLuint,
-                               fs_id: gl::GLuint,
-                               vertex_format: VertexFormat) -> Result<(), ShaderError> {
-        self.gl.attach_shader(self.id, vs_id);
-        self.gl.attach_shader(self.id, fs_id);
-
-        match vertex_format {
-            VertexFormat::Triangles |
-            VertexFormat::DebugFont |
-            VertexFormat::DebugColor => {
-                self.gl.bind_attrib_location(self.id, VertexAttribute::Position as gl::GLuint, "aPosition");
-                self.gl.bind_attrib_location(self.id, VertexAttribute::Color as gl::GLuint, "aColor");
-                self.gl.bind_attrib_location(self.id, VertexAttribute::ColorTexCoord as gl::GLuint, "aColorTexCoord");
-
-                self.gl.bind_attrib_location(self.id, VertexAttribute::Data0 as gl::GLuint, "aData0");
-                self.gl.bind_attrib_location(self.id, VertexAttribute::Data1 as gl::GLuint, "aData1");
-            }
-            VertexFormat::Blur => {
-                self.gl.bind_attrib_location(self.id, BlurAttribute::Position as gl::GLuint, "aPosition");
-                self.gl.bind_attrib_location(self.id, BlurAttribute::RenderTaskIndex as gl::GLuint, "aBlurRenderTaskIndex");
-                self.gl.bind_attrib_location(self.id, BlurAttribute::SourceTaskIndex as gl::GLuint, "aBlurSourceTaskIndex");
-                self.gl.bind_attrib_location(self.id, BlurAttribute::Direction as gl::GLuint, "aBlurDirection");
-            }
-            VertexFormat::Clip => {
-                self.gl.bind_attrib_location(self.id, ClipAttribute::Position as gl::GLuint, "aPosition");
-                self.gl.bind_attrib_location(self.id, ClipAttribute::RenderTaskIndex as gl::GLuint, "aClipRenderTaskIndex");
-                self.gl.bind_attrib_location(self.id, ClipAttribute::LayerIndex as gl::GLuint, "aClipLayerIndex");
-                self.gl.bind_attrib_location(self.id, ClipAttribute::DataIndex as gl::GLuint, "aClipDataIndex");
-                self.gl.bind_attrib_location(self.id, ClipAttribute::SegmentIndex as gl::GLuint, "aClipSegmentIndex");
-                self.gl.bind_attrib_location(self.id, ClipAttribute::ResourceAddress as gl::GLuint, "aClipResourceAddress");
-            }
-        }
-
-        self.gl.link_program(self.id);
-        if self.gl.get_program_iv(self.id, gl::LINK_STATUS) == (0 as gl::GLint) {
-            let error_log = self.gl.get_program_info_log(self.id);
-            println!("Failed to link shader program: {:?}\n{}", self.name, error_log);
-            self.gl.detach_shader(self.id, vs_id);
-            self.gl.detach_shader(self.id, fs_id);
-            return Err(ShaderError::Link(self.name.clone(), error_log));
-        }
-
-        Ok(())
-    }
-}
-
-impl Drop for Program {
-    fn drop(&mut self) {
-        self.gl.delete_program(self.id);
-    }
-}
-
-struct VAO {
-    gl: Rc<gl::Gl>,
-    id: gl::GLuint,
-    ibo_id: IBOId,
-    main_vbo_id: VBOId,
-    instance_vbo_id: VBOId,
-    instance_stride: gl::GLint,
-    owns_indices: bool,
-    owns_vertices: bool,
-    owns_instances: bool,
-}
-
-impl Drop for VAO {
-    fn drop(&mut self) {
-        self.gl.delete_vertex_arrays(&[self.id]);
-
-        if self.owns_indices {
-            // todo(gw): maybe make these their own type with hashmap?
-            self.gl.delete_buffers(&[self.ibo_id.0]);
-        }
-        if self.owns_vertices {
-            self.gl.delete_buffers(&[self.main_vbo_id.0]);
-        }
-        if self.owns_instances {
-            self.gl.delete_buffers(&[self.instance_vbo_id.0])
+    pub fn invalid_a8() -> TextureId {
+        TextureId {
+            name: 1,
         }
     }
+
+    pub fn is_valid(&self) -> bool { !(*self == TextureId::invalid() || *self == TextureId::invalid_a8()) }
+    pub fn is_dummy(&self) -> bool { self.name == DUMMY_A8_ID || self.name == DUMMY_RGBA8_ID }
+    pub fn is_dither(&self) -> bool { self.name == DITHER_ID }
+    pub fn is_skipable(&self) -> bool { !(self.is_valid()) || self.is_dummy() || self.is_dither() }
 }
 
 #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Copy, Clone)]
 pub struct TextureId {
-    name: gl::GLuint,
-    target: gl::GLuint,
+    name: u32,
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub struct ProgramId(pub gl::GLuint);
-
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub struct VAOId(gl::GLuint);
-
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub struct FBOId(gl::GLuint);
-
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub struct VBOId(gl::GLuint);
-
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-struct IBOId(gl::GLuint);
-
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub struct UBOId(gl::GLuint);
-
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub struct PBOId(gl::GLuint);
-
-const MAX_EVENTS_PER_FRAME: usize = 256;
-const MAX_PROFILE_FRAMES: usize = 4;
-
-pub trait NamedTag {
-    fn get_label(&self) -> &str;
-}
-
-#[derive(Debug, Clone)]
-pub struct GpuSample<T> {
-    pub tag: T,
-    pub time_ns: u64,
-}
-
-pub struct GpuFrameProfile<T> {
-    gl: Rc<gl::Gl>,
-    queries: Vec<gl::GLuint>,
-    samples: Vec<GpuSample<T>>,
-    next_query: usize,
-    pending_query: gl::GLuint,
-    frame_id: FrameId,
-    inside_frame: bool,
-}
-
-impl<T> GpuFrameProfile<T> {
-    fn new(gl: Rc<gl::Gl>) -> Self {
-        match gl.get_type() {
-            gl::GlType::Gl => {
-                let queries = gl.gen_queries(MAX_EVENTS_PER_FRAME as gl::GLint);
-                GpuFrameProfile {
-                    gl: gl,
-                    queries: queries,
-                    samples: Vec::new(),
-                    next_query: 0,
-                    pending_query: 0,
-                    frame_id: FrameId(0),
-                    inside_frame: false,
-                }
-            }
-            gl::GlType::Gles => {
-                GpuFrameProfile {
-                    gl: gl,
-                    queries: Vec::new(),
-                    samples: Vec::new(),
-                    next_query: 0,
-                    pending_query: 0,
-                    frame_id: FrameId(0),
-                    inside_frame: false,
-                }
-            }
-        }
-    }
-
-    fn begin_frame(&mut self, frame_id: FrameId) {
-        self.frame_id = frame_id;
-        self.next_query = 0;
-        self.pending_query = 0;
-        self.samples.clear();
-        self.inside_frame = true;
-    }
-
-    fn end_frame(&mut self) {
-        self.inside_frame = false;
-        match self.gl.get_type() {
-            gl::GlType::Gl => {
-                if self.pending_query != 0 {
-                    self.gl.end_query(gl::TIME_ELAPSED);
-                }
-            }
-            gl::GlType::Gles => {},
-        }
-    }
-
-    fn add_marker(&mut self, tag: T) -> GpuMarker
-    where T: NamedTag {
-        debug_assert!(self.inside_frame);
-        match self.gl.get_type() {
-            gl::GlType::Gl => {
-                self.add_marker_gl(tag)
-            }
-            gl::GlType::Gles => {
-                self.add_marker_gles(tag)
-            }
-        }
-    }
-
-    fn add_marker_gl(&mut self, tag: T) -> GpuMarker
-    where T: NamedTag {
-        if self.pending_query != 0 {
-            self.gl.end_query(gl::TIME_ELAPSED);
-        }
-
-        let marker = GpuMarker::new(&self.gl, tag.get_label());
-
-        if self.next_query < MAX_EVENTS_PER_FRAME {
-            self.pending_query = self.queries[self.next_query];
-            self.gl.begin_query(gl::TIME_ELAPSED, self.pending_query);
-            self.samples.push(GpuSample {
-                tag: tag,
-                time_ns: 0,
-            });
-        } else {
-            self.pending_query = 0;
-        }
-
-        self.next_query += 1;
-        marker
-    }
-
-    fn add_marker_gles(&mut self, tag: T) -> GpuMarker
-    where T: NamedTag {
-        let marker = GpuMarker::new(&self.gl, tag.get_label());
-        self.samples.push(GpuSample {
-            tag: tag,
-            time_ns: 0,
-        });
-        marker
-    }
-
-    fn is_valid(&self) -> bool {
-        self.next_query > 0 && self.next_query <= MAX_EVENTS_PER_FRAME
-    }
-
-    fn build_samples(&mut self) -> Vec<GpuSample<T>> {
-        debug_assert!(!self.inside_frame);
-        match self.gl.get_type() {
-            gl::GlType::Gl => {
-                self.build_samples_gl()
-            }
-            gl::GlType::Gles => {
-                self.build_samples_gles()
-            }
-        }
-    }
-
-    fn build_samples_gl(&mut self) -> Vec<GpuSample<T>> {
-        for (index, sample) in self.samples.iter_mut().enumerate() {
-            sample.time_ns = self.gl.get_query_object_ui64v(self.queries[index], gl::QUERY_RESULT)
-        }
-
-        mem::replace(&mut self.samples, Vec::new())
-    }
-
-    fn build_samples_gles(&mut self) -> Vec<GpuSample<T>> {
-        mem::replace(&mut self.samples, Vec::new())
-    }
-}
-
-impl<T> Drop for GpuFrameProfile<T> {
-    fn drop(&mut self) {
-        match self.gl.get_type() {
-            gl::GlType::Gl =>  {
-                self.gl.delete_queries(&self.queries);
-            }
-            gl::GlType::Gles => {},
-        }
-    }
-}
-
-pub struct GpuProfiler<T> {
-    frames: [GpuFrameProfile<T>; MAX_PROFILE_FRAMES],
-    next_frame: usize,
-}
-
-impl<T> GpuProfiler<T> {
-    pub fn new(gl: &Rc<gl::Gl>) -> GpuProfiler<T> {
-        GpuProfiler {
-            next_frame: 0,
-            frames: [
-                      GpuFrameProfile::new(Rc::clone(gl)),
-                      GpuFrameProfile::new(Rc::clone(gl)),
-                      GpuFrameProfile::new(Rc::clone(gl)),
-                      GpuFrameProfile::new(Rc::clone(gl)),
-                    ],
-        }
-    }
-
-    pub fn build_samples(&mut self) -> Option<(FrameId, Vec<GpuSample<T>>)> {
-        let frame = &mut self.frames[self.next_frame];
-        if frame.is_valid() {
-            Some((frame.frame_id, frame.build_samples()))
-        } else {
-            None
-        }
-    }
-
-    pub fn begin_frame(&mut self, frame_id: FrameId) {
-        let frame = &mut self.frames[self.next_frame];
-        frame.begin_frame(frame_id);
-    }
-
-    pub fn end_frame(&mut self) {
-        let frame = &mut self.frames[self.next_frame];
-        frame.end_frame();
-        self.next_frame = (self.next_frame + 1) % MAX_PROFILE_FRAMES;
-    }
-
-    pub fn add_marker(&mut self, tag: T) -> GpuMarker
-    where T: NamedTag {
-        self.frames[self.next_frame].add_marker(tag)
-    }
-}
-
-#[must_use]
-pub struct GpuMarker{
-    gl: Rc<gl::Gl>,
-}
-
-impl GpuMarker {
-    pub fn new(gl: &Rc<gl::Gl>, message: &str) -> GpuMarker {
-        match gl.get_type() {
-            gl::GlType::Gl =>  {
-                gl.push_group_marker_ext(message);
-                GpuMarker{
-                    gl: Rc::clone(gl),
-                }
-            }
-            gl::GlType::Gles => {
-                GpuMarker{
-                    gl: Rc::clone(gl),
-                }
-            }
-        }
-    }
-
-    pub fn fire(gl: &gl::Gl, message: &str) {
-        match gl.get_type() {
-            gl::GlType::Gl =>  {
-                gl.insert_event_marker_ext(message);
-            }
-            gl::GlType::Gles => {},
-        }
-    }
-}
-
-#[cfg(not(any(target_arch="arm", target_arch="aarch64")))]
-impl Drop for GpuMarker {
-    fn drop(&mut self) {
-        match self.gl.get_type() {
-            gl::GlType::Gl =>  {
-                self.gl.pop_group_marker_ext();
-            }
-            gl::GlType::Gles => {},
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum VertexUsageHint {
-    Static,
-    Dynamic,
-    Stream,
-}
-
-impl VertexUsageHint {
-    fn to_gl(&self) -> gl::GLuint {
-        match *self {
-            VertexUsageHint::Static => gl::STATIC_DRAW,
-            VertexUsageHint::Dynamic => gl::DYNAMIC_DRAW,
-            VertexUsageHint::Stream => gl::STREAM_DRAW,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct UniformLocation(gl::GLint);
-
-impl UniformLocation {
-    pub fn invalid() -> UniformLocation {
-        UniformLocation(-1)
-    }
-}
-
-// TODO(gw): Fix up notify cargo deps and re-enable this!
-/*
-enum FileWatcherCmd {
-    AddWatch(PathBuf),
-    Exit,
-}
-
-struct FileWatcherThread {
-    api_tx: Sender<FileWatcherCmd>,
-}
-
-impl FileWatcherThread {
-    fn new(handler: Box<FileWatcherHandler>) -> FileWatcherThread {
-        let (api_tx, api_rx) = channel();
-
-        thread::spawn(move || {
-
-            let (watch_tx, watch_rx) = channel();
-
-            enum Request {
-                Watcher(notify::Event),
-                Command(FileWatcherCmd),
-            }
-
-            let mut file_watcher: notify::RecommendedWatcher = notify::Watcher::new(watch_tx).unwrap();
-
-            loop {
-                let request = {
-                    let receiver_from_api = &api_rx;
-                    let receiver_from_watcher = &watch_rx;
-                    select! {
-                        msg = receiver_from_api.recv() => Request::Command(msg.unwrap()),
-                        msg = receiver_from_watcher.recv() => Request::Watcher(msg.unwrap())
-                    }
-                };
-
-                match request {
-                    Request::Watcher(event) => {
-                        handler.file_changed(event.path.unwrap());
-                    }
-                    Request::Command(cmd) => {
-                        match cmd {
-                            FileWatcherCmd::AddWatch(path) => {
-                                file_watcher.watch(path).ok();
-                            }
-                            FileWatcherCmd::Exit => {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        FileWatcherThread {
-            api_tx: api_tx,
-        }
-    }
-
-    fn exit(&self) {
-        self.api_tx.send(FileWatcherCmd::Exit).ok();
-    }
-
-    fn add_watch(&self, path: PathBuf) {
-        self.api_tx.send(FileWatcherCmd::AddWatch(path)).ok();
-    }
-}
-*/
-
-pub struct Capabilities {
-    pub max_ubo_size: usize,
-    pub supports_multisampling: bool,
+#[derive(Debug)]
+pub struct TextureData {
+    pub id: TextureId,
+    pub data: Vec<u8>,
+    pub stride: usize,
+    pub pitch: usize,
 }
 
 #[derive(Clone, Debug)]
 pub enum ShaderError {
     Compilation(String, String), // name, error mssage
-    Link(String, String), // name, error message
+    Link(String), // error message
 }
 
 pub struct Device {
-    gl: Rc<gl::Gl>,
-    // device state
-    bound_textures: [TextureId; 16],
-    bound_program: ProgramId,
-    bound_vao: VAOId,
-    bound_pbo: PBOId,
-    bound_read_fbo: FBOId,
-    bound_draw_fbo: FBOId,
-    default_read_fbo: gl::GLuint,
-    default_draw_fbo: gl::GLuint,
-    device_pixel_ratio: f32,
-
-    // HW or API capabilties
-    capabilities: Capabilities,
-
-    // debug
-    inside_frame: bool,
-
-    // resources
-    resource_override_path: Option<PathBuf>,
-    textures: HashMap<TextureId, Texture, BuildHasherDefault<FnvHasher>>,
-    programs: HashMap<ProgramId, Program, BuildHasherDefault<FnvHasher>>,
-    vaos: HashMap<VAOId, VAO, BuildHasherDefault<FnvHasher>>,
-
-    // misc.
-    shader_preamble: String,
-    //file_watcher: FileWatcherThread,
-
-    // Used on android only
-    #[allow(dead_code)]
-    next_vao_id: gl::GLuint,
-
-    max_texture_size: u32,
-
-    // Frame counter. This is used to map between CPU
-    // frames and GPU frames.
-    frame_id: FrameId,
+    pub device: device_gl::Device,
+    pub factory: device_gl::Factory,
+    pub encoder: gfx::Encoder<R,CB>,
+    pub textures: HashMap<TextureId, TextureData>,
+    pub color0: Texture<R, Srgba8>,
+    pub color1: Texture<R, Rgba8>,
+    pub color2: Texture<R, Rgba8>,
+    pub dither: Texture<R, A8>,
+    pub cache_a8: Texture<R, Rgba8>,
+    pub cache_rgba8: Texture<R, Rgba8>,
+    pub data16: Texture<R, Rgba32F>,
+    pub data32: Texture<R, Rgba32F>,
+    pub data64: Texture<R, Rgba32F>,
+    pub data128: Texture<R, Rgba32F>,
+    pub gradient_data: Texture<R, Srgba8>,
+    pub layers: Texture<R, Rgba32F>,
+    pub prim_geo: Texture<R, Rgba32F>,
+    pub render_tasks: Texture<R, Rgba32F>,
+    pub resource_rects: Texture<R, Rgba32F>,
+    pub split_geo: Texture<R, Rgba32F>,
+    pub max_texture_size: u32,
+    pub main_color: gfx::handle::RenderTargetView<R, ColorFormat>,
+    pub main_depth: gfx::handle::DepthStencilView<R, DepthFormat>,
+    pub vertex_buffer: gfx::handle::Buffer<R, Position>,
+    pub slice: gfx::Slice<R>,
+    pub rtv: gfx::handle::RenderTargetView<R, ColorFormat>,
+    pub dsv: gfx::handle::DepthStencilView<R, DepthFormat>,
 }
 
 impl Device {
-    pub fn new(gl: Rc<gl::Gl>,
-               resource_override_path: Option<PathBuf>,
-               _file_changed_handler: Box<FileWatcherHandler>) -> Device {
-        //let file_watcher = FileWatcherThread::new(file_changed_handler);
+    pub fn new(window: &glutin::Window) -> Device {
+        let (device, mut factory, main_color, main_depth) = init_existing::<ColorFormat, DepthFormat>(window);
+        /*println!("Vendor: {:?}", device.get_info().platform_name.vendor);
+        println!("Renderer: {:?}", device.get_info().platform_name.renderer);
+        println!("Version: {:?}", device.get_info().version);
+        println!("Shading Language: {:?}", device.get_info().shading_language);*/
+        let encoder = factory.create_command_buffer().into();
+        let max_texture_size = MAX_VERTEX_TEXTURE_WIDTH as u32;
 
-        let shader_preamble = get_shader_source(SHADER_PREAMBLE, &resource_override_path);
-        //file_watcher.add_watch(resource_path);
+        let (x0, y0, x1, y1) = (0.0, 0.0, 1.0, 1.0);
+        let quad_indices: &[u16] = &[ 0, 1, 2, 2, 1, 3 ];
+        let quad_vertices = [
+            Position::new([x0, y0]),
+            Position::new([x1, y0]),
+            Position::new([x0, y1]),
+            Position::new([x1, y1]),
+        ];
 
-        let max_ubo_size = gl.get_integer_v(gl::MAX_UNIFORM_BLOCK_SIZE) as usize;
-        let max_texture_size = gl.get_integer_v(gl::MAX_TEXTURE_SIZE) as u32;
+        let (vertex_buffer, mut slice) = factory.create_vertex_buffer_with_slice(&quad_vertices, quad_indices);
+        slice.instances = Some((MAX_INSTANCE_COUNT as u32, 0));
+
+        let (w, h, _, _) = main_color.get_dimensions();
+        let texture_size = [std::cmp::max(MAX_VERTEX_TEXTURE_WIDTH, h as usize), std::cmp::max(MAX_VERTEX_TEXTURE_WIDTH, w as usize)];
+        let color0 = Texture::empty(&mut factory, texture_size, TextureFilter::Linear, TextureTarget::Default).unwrap();
+        let color1 = Texture::empty(&mut factory, texture_size, TextureFilter::Linear, TextureTarget::Default).unwrap();
+        let color2 = Texture::empty(&mut factory, texture_size, TextureFilter::Linear, TextureTarget::Default).unwrap();
+        let dither = Texture::empty(&mut factory, [8, 8], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let cache_a8 = Texture::empty(&mut factory, texture_size, TextureFilter::Linear, TextureTarget::Array).unwrap();
+        let cache_rgba8 = Texture::empty(&mut factory, texture_size, TextureFilter::Linear, TextureTarget::Array).unwrap();
+
+        // TODO define some maximum boundaries for texture height
+        let data16_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 4], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let data32_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let data64_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let data128_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 4], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let gradient_data = Texture::empty(&mut factory, [2* GRADIENT_DATA_SIZE, TEXTURE_HEIGTH * 10], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let layers_tex = Texture::empty(&mut factory, [LAYER_TEXTURE_WIDTH, 64], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let prim_geo_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let render_tasks_tex = Texture::empty(&mut factory, [RENDER_TASK_TEXTURE_WIDTH, TEXTURE_HEIGTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let resource_rects = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 2], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let split_geo_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 2], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+
+        let mut textures = HashMap::new();
+        let (w, h) = color0.get_size();
+        let invalid_id = TextureId::invalid();
+        textures.insert(invalid_id, TextureData { id: invalid_id, data: vec![0u8; w * h * RGBA_STRIDE], stride: RGBA_STRIDE, pitch: w * RGBA_STRIDE });
+        let invalid_a8_id = TextureId::invalid_a8();
+        textures.insert(invalid_a8_id, TextureData { id: invalid_a8_id, data: vec![0u8; w * h * A_STRIDE], stride: A_STRIDE, pitch: w * A_STRIDE });
+        let dummy_rgba8_id = TextureId { name: DUMMY_RGBA8_ID };
+        textures.insert(dummy_rgba8_id, TextureData { id: dummy_rgba8_id, data: vec![0u8; w * h * RGBA_STRIDE], stride: RGBA_STRIDE, pitch: w * RGBA_STRIDE });
+        let dummy_a8_id = TextureId { name: DUMMY_A8_ID };
+        textures.insert(dummy_a8_id, TextureData { id: dummy_a8_id, data: vec![0u8; w * h * RGBA_STRIDE], stride: RGBA_STRIDE, pitch: w * RGBA_STRIDE });
+        let dither_id = TextureId { name: DITHER_ID };
+        let dither_matrix = vec![
+            00, 48, 12, 60, 03, 51, 15, 63,
+            32, 16, 44, 28, 35, 19, 47, 31,
+            08, 56, 04, 52, 11, 59, 07, 55,
+            40, 24, 36, 20, 43, 27, 39, 23,
+            02, 50, 14, 62, 01, 49, 13, 61,
+            34, 18, 46, 30, 33, 17, 45, 29,
+            10, 58, 06, 54, 09, 57, 05, 53,
+            42, 26, 38, 22, 41, 25, 37, 21
+        ];
+        textures.insert(dither_id, TextureData { id: dither_id, data: dither_matrix, stride: A_STRIDE, pitch: 8 * RGBA_STRIDE });
+
+        let (rtv, dsv) = create_main_targets::<ColorFormat, DepthFormat>(&mut factory, w as u16, h as u16).unwrap();
 
         Device {
-            gl: gl,
-            resource_override_path: resource_override_path,
-            // This is initialized to 1 by default, but it is set
-            // every frame by the call to begin_frame().
-            device_pixel_ratio: 1.0,
-            inside_frame: false,
-
-            capabilities: Capabilities {
-                max_ubo_size: max_ubo_size,
-                supports_multisampling: false, //TODO
-            },
-
-            bound_textures: [ TextureId::invalid(); 16 ],
-            bound_program: ProgramId(0),
-            bound_vao: VAOId(0),
-            bound_pbo: PBOId(0),
-            bound_read_fbo: FBOId(0),
-            bound_draw_fbo: FBOId(0),
-            default_read_fbo: 0,
-            default_draw_fbo: 0,
-
-            textures: HashMap::default(),
-            programs: HashMap::default(),
-            vaos: HashMap::default(),
-
-            shader_preamble: shader_preamble,
-
-            next_vao_id: 1,
-            //file_watcher: file_watcher,
-
+            device: device,
+            factory: factory,
+            encoder: encoder,
+            textures: textures,
+            color0: color0,
+            color1: color1,
+            color2: color2,
+            dither: dither,
+            cache_a8: cache_a8,
+            cache_rgba8: cache_rgba8,
+            data16: data16_tex,
+            data32: data32_tex,
+            data64: data64_tex,
+            data128: data128_tex,
+            gradient_data: gradient_data,
+            layers: layers_tex,
+            prim_geo: prim_geo_tex,
+            render_tasks: render_tasks_tex,
+            resource_rects: resource_rects,
+            split_geo: split_geo_tex,
             max_texture_size: max_texture_size,
-            frame_id: FrameId(0),
+            main_color: main_color,
+            main_depth: main_depth,
+            vertex_buffer: vertex_buffer,
+            slice: slice,
+            rtv: rtv,
+            dsv: dsv,
         }
     }
 
-    pub fn gl(&self) -> &gl::Gl {
-        &*self.gl
-    }
-
-    pub fn rc_gl(&self) -> &Rc<gl::Gl> {
-        &self.gl
+    pub fn read_pixels(&mut self, rect: DeviceUintRect, output: &mut [u8]) {
+        // TODO add bgra flag
+        self.encoder.flush(&mut self.device);
+        let tex = self.main_color.raw().get_texture();
+        let tex_info = tex.get_info().to_raw_image_info(gfx::format::ChannelType::Unorm, 0);
+        let (w, h, _, _) = self.main_color.get_dimensions();
+        let buf = self.factory.create_buffer::<u8>(w as usize * h as usize * RGBA_STRIDE,
+                                                   gfx::buffer::Role::Vertex,
+                                                   gfx::memory::Usage::Download,
+                                                   gfx::TRANSFER_DST).unwrap();
+        self.encoder.copy_texture_to_buffer_raw(tex, None, tex_info, buf.raw(), 0).unwrap();
+        self.encoder.flush(&mut self.device);
+        {
+            let reader = self.factory.read_mapping(&buf).unwrap();
+            let data = &*reader;
+            for j in 0..rect.size.height as usize {
+                for i in 0..rect.size.width as usize {
+                    let offset = i * RGBA_STRIDE + j * rect.size.width as usize * RGBA_STRIDE;
+                    let src = &data[(j + rect.origin.y as usize) * w as usize * RGBA_STRIDE + (i + rect.origin.x as usize) * RGBA_STRIDE ..];
+                    output[offset + 0] = src[0];
+                    output[offset + 1] = src[1];
+                    output[offset + 2] = src[2];
+                    output[offset + 3] = src[3];
+                }
+            }
+        }
     }
 
     pub fn max_texture_size(&self) -> u32 {
         self.max_texture_size
     }
 
-    pub fn get_capabilities(&self) -> &Capabilities {
-        &self.capabilities
+    fn generate_texture_id(&mut self) -> TextureId {
+        use rand::OsRng;
+
+        let mut rng = OsRng::new().unwrap();
+        let mut texture_id = TextureId::invalid();
+        while self.textures.contains_key(&texture_id) {
+            texture_id.name = rng.gen_range(FIRST_UNRESERVED_ID, u32::max_value());
+        }
+        texture_id
     }
 
-    pub fn compile_shader(gl: &gl::Gl,
-                          name: &str,
-                          source_str: &str,
-                          shader_type: gl::GLenum,
-                          shader_preamble: &[String])
-                          -> Result<gl::GLuint, ShaderError> {
-        debug!("compile {:?}", name);
-
-        let mut s = String::new();
-        s.push_str(get_shader_version(gl));
-        for prefix in shader_preamble {
-            s.push_str(prefix);
-        }
-        s.push_str(source_str);
-
-        let id = gl.create_shader(shader_type);
-        let mut source = Vec::new();
-        source.extend_from_slice(s.as_bytes());
-        gl.shader_source(id, &[&source[..]]);
-        gl.compile_shader(id);
-        let log = gl.get_shader_info_log(id);
-        if gl.get_shader_iv(id, gl::COMPILE_STATUS) == (0 as gl::GLint) {
-            println!("Failed to compile shader: {:?}\n{}", name, log);
-            Err(ShaderError::Compilation(name.to_string(), log))
-        } else {
-            if !log.is_empty() {
-                println!("Warnings detected on shader: {:?}\n{}", name, log);
-            }
-            Ok(id)
-        }
-    }
-
-    pub fn begin_frame(&mut self, device_pixel_ratio: f32) -> FrameId {
-        debug_assert!(!self.inside_frame);
-        self.inside_frame = true;
-        self.device_pixel_ratio = device_pixel_ratio;
-
-        // Retrive the currently set FBO.
-        let default_read_fbo = self.gl.get_integer_v(gl::READ_FRAMEBUFFER_BINDING);
-        self.default_read_fbo = default_read_fbo as gl::GLuint;
-        let default_draw_fbo = self.gl.get_integer_v(gl::DRAW_FRAMEBUFFER_BINDING);
-        self.default_draw_fbo = default_draw_fbo as gl::GLuint;
-
-        // Texture state
-        for i in 0..self.bound_textures.len() {
-            self.bound_textures[i] = TextureId::invalid();
-            self.gl.active_texture(gl::TEXTURE0 + i as gl::GLuint);
-            self.gl.bind_texture(gl::TEXTURE_2D, 0);
-        }
-
-        // Shader state
-        self.bound_program = ProgramId(0);
-        self.gl.use_program(0);
-
-        // Vertex state
-        self.bound_vao = VAOId(0);
-        self.clear_vertex_array();
-
-        // FBO state
-        self.bound_read_fbo = FBOId(self.default_read_fbo);
-        self.bound_draw_fbo = FBOId(self.default_draw_fbo);
-
-        // Pixel op state
-        self.gl.pixel_store_i(gl::UNPACK_ALIGNMENT, 1);
-        self.bound_pbo = PBOId(0);
-        self.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
-
-        // Default is sampler 0, always
-        self.gl.active_texture(gl::TEXTURE0);
-
-        self.frame_id
-    }
-
-    pub fn bind_texture(&mut self,
-                        sampler: TextureSampler,
-                        texture_id: TextureId) {
-        debug_assert!(self.inside_frame);
-
-        let sampler_index = sampler as usize;
-        if self.bound_textures[sampler_index] != texture_id {
-            self.bound_textures[sampler_index] = texture_id;
-            self.gl.active_texture(gl::TEXTURE0 + sampler_index as gl::GLuint);
-            texture_id.bind(self.gl());
-            self.gl.active_texture(gl::TEXTURE0);
-        }
-    }
-
-    pub fn bind_read_target(&mut self, texture_id: Option<(TextureId, i32)>) {
-        debug_assert!(self.inside_frame);
-
-        let fbo_id = texture_id.map_or(FBOId(self.default_read_fbo), |texture_id| {
-            self.textures.get(&texture_id.0).unwrap().fbo_ids[texture_id.1 as usize]
-        });
-
-        if self.bound_read_fbo != fbo_id {
-            self.bound_read_fbo = fbo_id;
-            fbo_id.bind(self.gl(), FBOTarget::Read);
-        }
-    }
-
-    pub fn bind_draw_target(&mut self,
-                            texture_id: Option<(TextureId, i32)>,
-                            dimensions: Option<DeviceUintSize>) {
-        debug_assert!(self.inside_frame);
-
-        let fbo_id = texture_id.map_or(FBOId(self.default_draw_fbo), |texture_id| {
-            self.textures.get(&texture_id.0).unwrap().fbo_ids[texture_id.1 as usize]
-        });
-
-        if self.bound_draw_fbo != fbo_id {
-            self.bound_draw_fbo = fbo_id;
-            fbo_id.bind(self.gl(), FBOTarget::Draw);
-        }
-
-        if let Some(dimensions) = dimensions {
-            self.gl.viewport(0, 0, dimensions.width as gl::GLint, dimensions.height as gl::GLint);
-        }
-    }
-
-    pub fn bind_program(&mut self,
-                        program_id: ProgramId,
-                        projection: &Transform3D<f32>) {
-        debug_assert!(self.inside_frame);
-
-        if self.bound_program != program_id {
-            self.bound_program = program_id;
-            program_id.bind(&*self.gl);
-        }
-
-        let program = self.programs.get(&program_id).unwrap();
-        self.set_uniforms(program,
-                          projection,
-                          self.device_pixel_ratio);
-    }
-
-    pub fn create_texture_ids(&mut self,
-                              count: i32,
-                              target: TextureTarget) -> Vec<TextureId> {
-        let id_list = self.gl.gen_textures(count);
-        let mut texture_ids = Vec::new();
-
-        for id in id_list {
-            let texture_id = TextureId {
-                name: id,
-                target: target.to_gl_target(),
-            };
-
-            let texture = Texture {
-                gl: Rc::clone(&self.gl),
-                id: id,
-                width: 0,
-                height: 0,
-                format: ImageFormat::Invalid,
-                filter: TextureFilter::Nearest,
-                mode: RenderTargetMode::None,
-                fbo_ids: vec![],
-            };
-
-            debug_assert!(self.textures.contains_key(&texture_id) == false);
-            self.textures.insert(texture_id, texture);
-
-            texture_ids.push(texture_id);
-        }
-
-        texture_ids
-    }
-
-    pub fn get_texture_dimensions(&self, texture_id: TextureId) -> DeviceUintSize {
-        let texture = &self.textures[&texture_id];
-        DeviceUintSize::new(texture.width, texture.height)
-    }
-
-    fn set_texture_parameters(&mut self, target: gl::GLuint, filter: TextureFilter) {
-        let filter = match filter {
-            TextureFilter::Nearest => {
-                gl::NEAREST
-            }
-            TextureFilter::Linear => {
-                gl::LINEAR
-            }
+    pub fn create_texture_id(&mut self,
+                             _target: TextureTarget,
+                             format: ImageFormat) -> TextureId {
+        let (w, h) = self.color0.get_size();
+        let texture_id = self.generate_texture_id();
+        let stride = match format {
+            ImageFormat::A8 => A_STRIDE,
+            ImageFormat::BGRA8 => RGBA_STRIDE,
+            ImageFormat::RG8 => RG_STRIDE,
+            ImageFormat::RGB8 => RGB_STRIDE,
+            _ => unimplemented!(),
         };
-
-        self.gl.tex_parameter_i(target, gl::TEXTURE_MAG_FILTER, filter as gl::GLint);
-        self.gl.tex_parameter_i(target, gl::TEXTURE_MIN_FILTER, filter as gl::GLint);
-
-        self.gl.tex_parameter_i(target, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as gl::GLint);
-        self.gl.tex_parameter_i(target, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as gl::GLint);
-    }
-
-    fn upload_texture_image(&mut self,
-                            target: gl::GLuint,
-                            width: u32,
-                            height: u32,
-                            internal_format: u32,
-                            format: u32,
-                            type_: u32,
-                            pixels: Option<&[u8]>) {
-        self.gl.tex_image_2d(target,
-                              0,
-                              internal_format as gl::GLint,
-                              width as gl::GLint, height as gl::GLint,
-                              0,
-                              format,
-                              type_,
-                              pixels);
+        let texture_data = vec![0u8; w * h * stride];
+        assert!(!self.textures.contains_key(&texture_id));
+        self.textures.insert(texture_id, TextureData {id: texture_id, data: texture_data, stride: stride, pitch: w * stride });
+        texture_id
     }
 
     pub fn init_texture(&mut self,
                         texture_id: TextureId,
-                        width: u32,
-                        height: u32,
+                        _width: u32,
+                        _height: u32,
                         format: ImageFormat,
-                        filter: TextureFilter,
-                        mode: RenderTargetMode,
+                        _filter: TextureFilter,
+                        _mode: RenderTargetMode,
                         pixels: Option<&[u8]>) {
-        debug_assert!(self.inside_frame);
-
-        {
-            let texture = self.textures.get_mut(&texture_id).expect("Didn't find texture!");
-            texture.format = format;
-            texture.width = width;
-            texture.height = height;
-            texture.filter = filter;
-            texture.mode = mode;
-        }
-
-        let (internal_format, gl_format) = gl_texture_formats_for_image_format(self.gl(), format);
-        let type_ = gl_type_for_texture_format(format);
-
-        match mode {
-            RenderTargetMode::SimpleRenderTarget => {
-                self.bind_texture(DEFAULT_TEXTURE, texture_id);
-                self.set_texture_parameters(texture_id.target, filter);
-                self.upload_texture_image(texture_id.target,
-                                          width,
-                                          height,
-                                          internal_format as u32,
-                                          gl_format,
-                                          type_,
-                                          None);
-                self.create_fbo_for_texture_if_necessary(texture_id, None);
-            }
-            RenderTargetMode::LayerRenderTarget(layer_count) => {
-                self.bind_texture(DEFAULT_TEXTURE, texture_id);
-                self.set_texture_parameters(texture_id.target, filter);
-                self.create_fbo_for_texture_if_necessary(texture_id, Some(layer_count));
-            }
-            RenderTargetMode::None => {
-                self.bind_texture(DEFAULT_TEXTURE, texture_id);
-                self.set_texture_parameters(texture_id.target, filter);
-                let expanded_data: Vec<u8>;
-                let actual_pixels = if pixels.is_some() &&
-                                       format == ImageFormat::A8 &&
-                                       cfg!(any(target_arch="arm", target_arch="aarch64")) {
-                    expanded_data = pixels.unwrap().iter().flat_map(|&byte| repeat(byte).take(4)).collect();
-                    Some(expanded_data.as_slice())
-                } else {
-                    pixels
-                };
-                self.upload_texture_image(texture_id.target,
-                                          width,
-                                          height,
-                                          internal_format as u32,
-                                          gl_format,
-                                          type_,
-                                          actual_pixels);
-            }
-        }
-    }
-
-    pub fn get_render_target_layer_count(&self, texture_id: TextureId) -> usize {
-        self.textures[&texture_id].fbo_ids.len()
-    }
-
-    pub fn create_fbo_for_texture_if_necessary(&mut self,
-                                               texture_id: TextureId,
-                                               layer_count: Option<i32>) {
-        let texture = self.textures.get_mut(&texture_id).unwrap();
-
-        match layer_count {
-            Some(layer_count) => {
-                debug_assert!(layer_count > 0);
-
-                // If we have enough layers allocated already, just use them.
-                // TODO(gw): Probably worth removing some after a while if
-                //           there is a surplus?
-                let current_layer_count = texture.fbo_ids.len() as i32;
-                if current_layer_count >= layer_count {
-                    return;
-                }
-
-                let (internal_format, gl_format) = gl_texture_formats_for_image_format(&*self.gl, texture.format);
-                let type_ = gl_type_for_texture_format(texture.format);
-
-                self.gl.tex_image_3d(texture_id.target,
-                                      0,
-                                      internal_format as gl::GLint,
-                                      texture.width as gl::GLint,
-                                      texture.height as gl::GLint,
-                                      layer_count,
-                                      0,
-                                      gl_format,
-                                      type_,
-                                      None);
-
-                let needed_layer_count = layer_count - current_layer_count;
-                let new_fbos = self.gl.gen_framebuffers(needed_layer_count);
-                texture.fbo_ids.extend(new_fbos.into_iter().map(|id| FBOId(id)));
-
-                for (fbo_index, fbo_id) in texture.fbo_ids.iter().enumerate() {
-                    self.gl.bind_framebuffer(gl::FRAMEBUFFER, fbo_id.0);
-                    self.gl.framebuffer_texture_layer(gl::FRAMEBUFFER,
-                                                       gl::COLOR_ATTACHMENT0,
-                                                       texture_id.name,
-                                                       0,
-                                                       fbo_index as gl::GLint);
-
-                    // TODO(gw): Share depth render buffer between FBOs to
-                    //           save memory!
-                    // TODO(gw): Free these renderbuffers on exit!
-                    let renderbuffer_ids = self.gl.gen_renderbuffers(1);
-                    let depth_rb = renderbuffer_ids[0];
-                    self.gl.bind_renderbuffer(gl::RENDERBUFFER, depth_rb);
-                    self.gl.renderbuffer_storage(gl::RENDERBUFFER,
-                                                  gl::DEPTH_COMPONENT24,
-                                                  texture.width as gl::GLsizei,
-                                                  texture.height as gl::GLsizei);
-                    self.gl.framebuffer_renderbuffer(gl::FRAMEBUFFER,
-                                                      gl::DEPTH_ATTACHMENT,
-                                                      gl::RENDERBUFFER,
-                                                      depth_rb);
-                }
-            }
-            None => {
-                debug_assert!(texture.fbo_ids.len() == 0 || texture.fbo_ids.len() == 1);
-                if texture.fbo_ids.is_empty() {
-                    let new_fbo = self.gl.gen_framebuffers(1)[0];
-
-                    self.gl.bind_framebuffer(gl::FRAMEBUFFER, new_fbo);
-
-                    self.gl.framebuffer_texture_2d(gl::FRAMEBUFFER,
-                                                    gl::COLOR_ATTACHMENT0,
-                                                    texture_id.target,
-                                                    texture_id.name,
-                                                    0);
-
-                    texture.fbo_ids.push(FBOId(new_fbo));
-                }
-            }
-        }
-
-        // TODO(gw): Hack! Modify the code above to use the normal binding interfaces the device exposes.
-        self.gl.bind_framebuffer(gl::READ_FRAMEBUFFER, self.bound_read_fbo.0);
-        self.gl.bind_framebuffer(gl::DRAW_FRAMEBUFFER, self.bound_draw_fbo.0);
-    }
-
-    pub fn blit_render_target(&mut self,
-                              src_texture: Option<(TextureId, i32)>,
-                              src_rect: Option<DeviceIntRect>,
-                              dest_rect: DeviceIntRect) {
-        debug_assert!(self.inside_frame);
-
-        let src_rect = src_rect.unwrap_or_else(|| {
-            let texture = self.textures.get(&src_texture.unwrap().0).expect("unknown texture id!");
-            DeviceIntRect::new(DeviceIntPoint::zero(),
-                               DeviceIntSize::new(texture.width as gl::GLint,
-                                                  texture.height as gl::GLint))
-        });
-
-        self.bind_read_target(src_texture);
-
-        self.gl.blit_framebuffer(src_rect.origin.x,
-                                  src_rect.origin.y,
-                                  src_rect.origin.x + src_rect.size.width,
-                                  src_rect.origin.y + src_rect.size.height,
-                                  dest_rect.origin.x,
-                                  dest_rect.origin.y,
-                                  dest_rect.origin.x + dest_rect.size.width,
-                                  dest_rect.origin.y + dest_rect.size.height,
-                                  gl::COLOR_BUFFER_BIT,
-                                  gl::LINEAR);
-    }
-
-    pub fn resize_texture(&mut self,
-                          texture_id: TextureId,
-                          new_width: u32,
-                          new_height: u32,
-                          format: ImageFormat,
-                          filter: TextureFilter,
-                          mode: RenderTargetMode) {
-        debug_assert!(self.inside_frame);
-
-        let old_size = self.get_texture_dimensions(texture_id);
-
-        let temp_texture_id = self.create_texture_ids(1, TextureTarget::Default)[0];
-        self.init_texture(temp_texture_id, old_size.width, old_size.height, format, filter, mode, None);
-        self.create_fbo_for_texture_if_necessary(temp_texture_id, None);
-
-        self.bind_read_target(Some((texture_id, 0)));
-        self.bind_texture(DEFAULT_TEXTURE, temp_texture_id);
-
-        self.gl.copy_tex_sub_image_2d(temp_texture_id.target,
-                                       0,
-                                       0,
-                                       0,
-                                       0,
-                                       0,
-                                       old_size.width as i32,
-                                       old_size.height as i32);
-
-        self.deinit_texture(texture_id);
-        self.init_texture(texture_id, new_width, new_height, format, filter, mode, None);
-        self.create_fbo_for_texture_if_necessary(texture_id, None);
-        self.bind_read_target(Some((temp_texture_id, 0)));
-        self.bind_texture(DEFAULT_TEXTURE, texture_id);
-
-        self.gl.copy_tex_sub_image_2d(texture_id.target,
-                                       0,
-                                       0,
-                                       0,
-                                       0,
-                                       0,
-                                       old_size.width as i32,
-                                       old_size.height as i32);
-
-        self.bind_read_target(None);
-        self.deinit_texture(temp_texture_id);
-    }
-
-    pub fn deinit_texture(&mut self, texture_id: TextureId) {
-        debug_assert!(self.inside_frame);
-
-        self.bind_texture(DEFAULT_TEXTURE, texture_id);
-
-        let texture = self.textures.get_mut(&texture_id).unwrap();
-        let (internal_format, gl_format) = gl_texture_formats_for_image_format(&*self.gl, texture.format);
-        let type_ = gl_type_for_texture_format(texture.format);
-
-        self.gl.tex_image_2d(texture_id.target,
-                              0,
-                              internal_format,
-                              0,
-                              0,
-                              0,
-                              gl_format,
-                              type_,
-                              None);
-
-        if !texture.fbo_ids.is_empty() {
-            let fbo_ids: Vec<_> = texture.fbo_ids.iter().map(|&FBOId(fbo_id)| fbo_id).collect();
-            self.gl.delete_framebuffers(&fbo_ids[..]);
-        }
-
-        texture.format = ImageFormat::Invalid;
-        texture.width = 0;
-        texture.height = 0;
-        texture.fbo_ids.clear();
-    }
-
-    pub fn create_program(&mut self,
-                          base_filename: &str,
-                          include_filename: &str,
-                          vertex_format: VertexFormat) -> Result<ProgramId, ShaderError> {
-        self.create_program_with_prefix(base_filename, &[include_filename], None, vertex_format)
-    }
-
-    pub fn create_program_with_prefix(&mut self,
-                                      base_filename: &str,
-                                      include_filenames: &[&str],
-                                      prefix: Option<String>,
-                                      vertex_format: VertexFormat) -> Result<ProgramId, ShaderError> {
-        debug_assert!(self.inside_frame);
-
-        let pid = self.gl.create_program();
-
-        let mut vs_name = String::from(base_filename);
-        vs_name.push_str(".vs");
-        let mut fs_name = String::from(base_filename);
-        fs_name.push_str(".fs");
-
-        let mut include = format!("// Base shader: {}\n", base_filename);
-        for inc_filename in include_filenames {
-            let src = get_shader_source(inc_filename, &self.resource_override_path);
-            include.push_str(&src);
-        }
-
-        if let Some(shared_src) = get_optional_shader_source(base_filename, &self.resource_override_path) {
-            include.push_str(&shared_src);
-        }
-
-        let program = Program {
-            gl: Rc::clone(&self.gl),
-            name: base_filename.to_owned(),
-            id: pid,
-            u_transform: -1,
-            u_device_pixel_ratio: -1,
-            vs_source: get_shader_source(&vs_name, &self.resource_override_path),
-            fs_source: get_shader_source(&fs_name, &self.resource_override_path),
-            prefix: prefix,
-            vs_id: None,
-            fs_id: None,
+        //println!("init_texture texture_id={:?} _width={:?} _height={:?} format={:?} _filter={:?} _mode={:?}", texture_id, _width, _height, format, _filter, _mode);
+        let texture = self.textures.get_mut(&texture_id).expect("Didn't find texture!");
+        //println!("init_texture texture.stride={:?} texture.data.len={:?}", texture.stride, texture.data.len());
+        let stride = match format {
+            ImageFormat::A8 => A_STRIDE,
+            ImageFormat::BGRA8 => RGBA_STRIDE,
+            ImageFormat::RG8 => RG_STRIDE,
+            ImageFormat::RGB8 => RGB_STRIDE,
+            _ => unimplemented!(),
         };
-
-        let program_id = ProgramId(pid);
-
-        debug_assert!(self.programs.contains_key(&program_id) == false);
-        self.programs.insert(program_id, program);
-
-        try!{ self.load_program(program_id, include, vertex_format) };
-
-        Ok(program_id)
-    }
-
-    fn load_program(&mut self,
-                    program_id: ProgramId,
-                    include: String,
-                    vertex_format: VertexFormat) -> Result<(), ShaderError> {
-        debug_assert!(self.inside_frame);
-
-        let program = self.programs.get_mut(&program_id).unwrap();
-
-        let mut vs_preamble = Vec::new();
-        let mut fs_preamble = Vec::new();
-
-        vs_preamble.push("#define WR_VERTEX_SHADER\n".to_owned());
-        fs_preamble.push("#define WR_FRAGMENT_SHADER\n".to_owned());
-
-        if let Some(ref prefix) = program.prefix {
-            vs_preamble.push(prefix.clone());
-            fs_preamble.push(prefix.clone());
+        if stride != texture.stride {
+            texture.stride = stride;
+            texture.data.clear();
         }
-
-        vs_preamble.push(self.shader_preamble.to_owned());
-        fs_preamble.push(self.shader_preamble.to_owned());
-
-        vs_preamble.push(include.clone());
-        fs_preamble.push(include);
-
-        // todo(gw): store shader ids so they can be freed!
-        let vs_id = try!{ Device::compile_shader(&*self.gl,
-                                                 &program.name,
-                                                 &program.vs_source,
-                                                 gl::VERTEX_SHADER,
-                                                 &vs_preamble) };
-        let fs_id = try!{ Device::compile_shader(&*self.gl,
-                                                 &program.name,
-                                                 &program.fs_source,
-                                                 gl::FRAGMENT_SHADER,
-                                                 &fs_preamble) };
-
-        if let Some(vs_id) = program.vs_id {
-            self.gl.detach_shader(program.id, vs_id);
-        }
-
-        if let Some(fs_id) = program.fs_id {
-            self.gl.detach_shader(program.id, fs_id);
-        }
-
-        if let Err(bind_error) = program.attach_and_bind_shaders(vs_id, fs_id, vertex_format) {
-            if let (Some(vs_id), Some(fs_id)) = (program.vs_id, program.fs_id) {
-                try! { program.attach_and_bind_shaders(vs_id, fs_id, vertex_format) };
-            } else {
-               return Err(bind_error);
-            }
-        } else {
-            if let Some(vs_id) = program.vs_id {
-                self.gl.delete_shader(vs_id);
-            }
-
-            if let Some(fs_id) = program.fs_id {
-                self.gl.delete_shader(fs_id);
-            }
-
-            program.vs_id = Some(vs_id);
-            program.fs_id = Some(fs_id);
-        }
-
-        program.u_transform = self.gl.get_uniform_location(program.id, "uTransform");
-        program.u_device_pixel_ratio = self.gl.get_uniform_location(program.id, "uDevicePixelRatio");
-
-        program_id.bind(&*self.gl);
-        let u_color_0 = self.gl.get_uniform_location(program.id, "sColor0");
-        if u_color_0 != -1 {
-            self.gl.uniform_1i(u_color_0, TextureSampler::Color0 as i32);
-        }
-        let u_color1 = self.gl.get_uniform_location(program.id, "sColor1");
-        if u_color1 != -1 {
-            self.gl.uniform_1i(u_color1, TextureSampler::Color1 as i32);
-        }
-        let u_color_2 = self.gl.get_uniform_location(program.id, "sColor2");
-        if u_color_2 != -1 {
-            self.gl.uniform_1i(u_color_2, TextureSampler::Color2 as i32);
-        }
-        let u_noise = self.gl.get_uniform_location(program.id, "sDither");
-        if u_noise != -1 {
-            self.gl.uniform_1i(u_noise, TextureSampler::Dither as i32);
-        }
-        let u_cache_a8 = self.gl.get_uniform_location(program.id, "sCacheA8");
-        if u_cache_a8 != -1 {
-            self.gl.uniform_1i(u_cache_a8, TextureSampler::CacheA8 as i32);
-        }
-        let u_cache_rgba8 = self.gl.get_uniform_location(program.id, "sCacheRGBA8");
-        if u_cache_rgba8 != -1 {
-            self.gl.uniform_1i(u_cache_rgba8, TextureSampler::CacheRGBA8 as i32);
-        }
-
-        let u_layers = self.gl.get_uniform_location(program.id, "sLayers");
-        if u_layers != -1 {
-            self.gl.uniform_1i(u_layers, TextureSampler::Layers as i32);
-        }
-
-        let u_tasks = self.gl.get_uniform_location(program.id, "sRenderTasks");
-        if u_tasks != -1 {
-            self.gl.uniform_1i(u_tasks, TextureSampler::RenderTasks as i32);
-        }
-
-        let u_resource_cache = self.gl.get_uniform_location(program.id, "sResourceCache");
-        if u_resource_cache != -1 {
-            self.gl.uniform_1i(u_resource_cache, TextureSampler::ResourceCache as i32);
-        }
-
-        Ok(())
-    }
-
-/*
-    pub fn refresh_shader(&mut self, path: PathBuf) {
-        let mut vs_preamble_path = self.resource_path.clone();
-        vs_preamble_path.push(VERTEX_SHADER_PREAMBLE);
-
-        let mut fs_preamble_path = self.resource_path.clone();
-        fs_preamble_path.push(FRAGMENT_SHADER_PREAMBLE);
-
-        let mut refresh_all = false;
-
-        if path == vs_preamble_path {
-            let mut f = File::open(&vs_preamble_path).unwrap();
-            self.vertex_shader_preamble = String::new();
-            f.read_to_string(&mut self.vertex_shader_preamble).unwrap();
-            refresh_all = true;
-        }
-
-        if path == fs_preamble_path {
-            let mut f = File::open(&fs_preamble_path).unwrap();
-            self.fragment_shader_preamble = String::new();
-            f.read_to_string(&mut self.fragment_shader_preamble).unwrap();
-            refresh_all = true;
-        }
-
-        let mut programs_to_update = Vec::new();
-
-        for (program_id, program) in &mut self.programs {
-            if refresh_all || program.vs_path == path || program.fs_path == path {
-                programs_to_update.push(*program_id)
-            }
-        }
-
-        for program_id in programs_to_update {
-            self.load_program(program_id, false);
-        }
-    }*/
-
-    pub fn get_uniform_location(&self, program_id: ProgramId, name: &str) -> UniformLocation {
-        let ProgramId(program_id) = program_id;
-        UniformLocation(self.gl.get_uniform_location(program_id, name))
-    }
-
-    pub fn set_uniform_2f(&self, uniform: UniformLocation, x: f32, y: f32) {
-        debug_assert!(self.inside_frame);
-        let UniformLocation(location) = uniform;
-        self.gl.uniform_2f(location, x, y);
-    }
-
-    fn set_uniforms(&self,
-                    program: &Program,
-                    transform: &Transform3D<f32>,
-                    device_pixel_ratio: f32) {
-        debug_assert!(self.inside_frame);
-        self.gl.uniform_matrix_4fv(program.u_transform,
-                               false,
-                               &transform.to_row_major_array());
-        self.gl.uniform_1f(program.u_device_pixel_ratio, device_pixel_ratio);
-    }
-
-    pub fn create_pbo(&mut self) -> PBOId {
-        let id = self.gl.gen_buffers(1)[0];
-        PBOId(id)
-    }
-
-    pub fn destroy_pbo(&mut self, id: PBOId) {
-        self.gl.delete_buffers(&[id.0]);
-    }
-
-    pub fn bind_pbo(&mut self, pbo_id: Option<PBOId>) {
-        debug_assert!(self.inside_frame);
-        let pbo_id = pbo_id.unwrap_or(PBOId(0));
-
-        if self.bound_pbo != pbo_id {
-            self.bound_pbo = pbo_id;
-
-            self.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, pbo_id.0);
-        }
-    }
-
-    pub fn update_pbo_data<T>(&mut self, data: &[T]) {
-        debug_assert!(self.inside_frame);
-        debug_assert!(self.bound_pbo.0 != 0);
-
-        gl::buffer_data(&*self.gl,
-                        gl::PIXEL_UNPACK_BUFFER,
-                        data,
-                        gl::STREAM_DRAW);
-    }
-
-    pub fn orphan_pbo(&mut self, new_size: usize) {
-        debug_assert!(self.inside_frame);
-        debug_assert!(self.bound_pbo.0 != 0);
-
-        self.gl.buffer_data_untyped(gl::PIXEL_UNPACK_BUFFER,
-                                    new_size as isize,
-                                    ptr::null(),
-                                    gl::STREAM_DRAW);
-    }
-
-    pub fn update_texture_from_pbo(&mut self,
-                                   texture_id: TextureId,
-                                   x0: u32,
-                                   y0: u32,
-                                   width: u32,
-                                   height: u32,
-                                   offset: usize) {
-        debug_assert!(self.inside_frame);
-        debug_assert_eq!(self.textures.get(&texture_id).unwrap().format, ImageFormat::RGBAF32);
-
-        self.bind_texture(DEFAULT_TEXTURE, texture_id);
-
-        self.gl.tex_sub_image_2d_pbo(texture_id.target,
-                                     0,
-                                     x0 as gl::GLint,
-                                     y0 as gl::GLint,
-                                     width as gl::GLint,
-                                     height as gl::GLint,
-                                     gl::RGBA,
-                                     gl::FLOAT,
-                                     offset);
+        let actual_pixels = match pixels {
+            Some(data) => data.to_vec(),
+            None => {
+                let (w, h) = self.color0.get_size();
+                vec![0u8; w * h * texture.stride]
+            },
+        };
+        assert!(texture.data.len() == actual_pixels.len());
+        mem::replace(&mut texture.data, actual_pixels);
     }
 
     pub fn update_texture(&mut self,
@@ -1702,420 +472,417 @@ impl Device {
                           height: u32,
                           stride: Option<u32>,
                           data: &[u8]) {
-        debug_assert!(self.inside_frame);
-
-        let mut expanded_data = Vec::new();
-
-        let (gl_format, bpp, data, data_type) = match self.textures.get(&texture_id).unwrap().format {
-            ImageFormat::A8 => {
-                if cfg!(any(target_arch="arm", target_arch="aarch64")) {
-                    expanded_data.extend(data.iter().flat_map(|byte| repeat(*byte).take(4)));
-                    (get_gl_format_bgra(self.gl()), 4, expanded_data.as_slice(), gl::UNSIGNED_BYTE)
-                } else {
-                    (GL_FORMAT_A, 1, data, gl::UNSIGNED_BYTE)
-                }
-            }
-            ImageFormat::RGB8 => (gl::RGB, 3, data, gl::UNSIGNED_BYTE),
-            ImageFormat::BGRA8 => (get_gl_format_bgra(self.gl()), 4, data, gl::UNSIGNED_BYTE),
-            ImageFormat::RG8 => (gl::RG, 2, data, gl::UNSIGNED_BYTE),
-            ImageFormat::RGBAF32 => (gl::RGBA, 16, data, gl::FLOAT),
-            ImageFormat::Invalid => unreachable!(),
-        };
-
+        //println!("update {:?} x0={:?} y0={:?} width={:?} height={:?} stride={:?} size={:?}", texture_id, x0, y0, width, height, stride, data.len());
+        let texture = self.textures.get_mut(&texture_id).expect("Didn't find texture!");
+        assert!(!(texture.data.len() < data.len()));
+        //println!("\ttex.stride={:?} tex.pitch={:?} tex.size={:?}", texture.stride, texture.pitch, texture.data.len());
+        //let (w, _) = self.color0.get_size();
         let row_length = match stride {
-            Some(value) => value / bpp,
-            None => width,
+            Some(value) => value as usize / texture.stride,
+            None => width as usize,
         };
-
         // Take the stride into account for all rows, except the last one.
-        let len = bpp * row_length * (height - 1)
-                + width * bpp;
-        let data = &data[0..len as usize];
-
-        if let Some(..) = stride {
-            self.gl.pixel_store_i(gl::UNPACK_ROW_LENGTH, row_length as gl::GLint);
-        }
-
-        self.bind_texture(DEFAULT_TEXTURE, texture_id);
-
-        self.gl.tex_sub_image_2d(texture_id.target,
-                                 0,
-                                 x0 as gl::GLint,
-                                 y0 as gl::GLint,
-                                 width as gl::GLint,
-                                 height as gl::GLint,
-                                 gl_format,
-                                 data_type,
-                                 data);
-
-        // Reset row length to 0, otherwise the stride would apply to all texture uploads.
-        if let Some(..) = stride {
-            self.gl.pixel_store_i(gl::UNPACK_ROW_LENGTH, 0 as gl::GLint);
-        }
+        let data_pitch = row_length * texture.stride;
+        let len = data_pitch * (height - 1) as usize + width as usize * texture.stride;
+        //let len = std::cmp::min(texture.stride * row_length * (height - 1) as usize
+        //                        + width as usize * texture.stride, data.len());
+        //println!("\tcomputed len={:?}, height*pitch={:?} data_size={:?}", len, height as usize * data_pitch, data.len());
+        //println!("\ttarget_width={:?}, row_length={:?}", w, row_length);
+        let data = &data[0 .. len];
+        Device::update_texture_data(texture, x0 as usize, y0 as usize, width as usize, height as usize, data_pitch, data);
     }
 
-    fn clear_vertex_array(&mut self) {
-        debug_assert!(self.inside_frame);
-        self.gl.bind_vertex_array(0);
-    }
-
-    pub fn bind_vao(&mut self, vao_id: VAOId) {
-        debug_assert!(self.inside_frame);
-
-        if self.bound_vao != vao_id {
-            self.bound_vao = vao_id;
-
-            let VAOId(id) = vao_id;
-            self.gl.bind_vertex_array(id);
-        }
-    }
-
-    fn create_vao_with_vbos(&mut self,
-                            format: VertexFormat,
-                            main_vbo_id: VBOId,
-                            instance_vbo_id: VBOId,
-                            ibo_id: IBOId,
-                            vertex_offset: gl::GLuint,
-                            instance_stride: gl::GLint,
-                            owns_vertices: bool,
-                            owns_instances: bool,
-                            owns_indices: bool)
-                            -> VAOId {
-        debug_assert!(self.inside_frame);
-
-        let vao_ids = self.gl.gen_vertex_arrays(1);
-        let vao_id = vao_ids[0];
-
-        self.gl.bind_vertex_array(vao_id);
-
-        format.bind(self.gl(), main_vbo_id, instance_vbo_id, vertex_offset, instance_stride);
-        ibo_id.bind(self.gl()); // force it to be a part of VAO
-
-        let vao = VAO {
-            gl: Rc::clone(&self.gl),
-            id: vao_id,
-            ibo_id: ibo_id,
-            main_vbo_id: main_vbo_id,
-            instance_vbo_id: instance_vbo_id,
-            instance_stride: instance_stride,
-            owns_indices: owns_indices,
-            owns_vertices: owns_vertices,
-            owns_instances: owns_instances,
+    pub fn resize_texture(&mut self,
+                          texture_id: TextureId,
+                          new_width: u32,
+                          new_height: u32,
+                          format: ImageFormat,
+                          _filter: TextureFilter,
+                          _mode: RenderTargetMode) {
+        let texture = self.textures.get_mut(&texture_id).expect("Didn't find texture!");
+        let stride = match format {
+            ImageFormat::A8 => A_STRIDE,
+            ImageFormat::BGRA8 => RGBA_STRIDE,
+            ImageFormat::RG8 => RG_STRIDE,
+            ImageFormat::RGB8 => RGB_STRIDE,
+            _ => unimplemented!(),
         };
-
-        self.gl.bind_vertex_array(0);
-
-        let vao_id = VAOId(vao_id);
-
-        debug_assert!(!self.vaos.contains_key(&vao_id));
-        self.vaos.insert(vao_id, vao);
-
-        vao_id
-    }
-
-    pub fn create_vao(&mut self, format: VertexFormat, inst_stride: gl::GLint) -> VAOId {
-        debug_assert!(self.inside_frame);
-
-        let buffer_ids = self.gl.gen_buffers(3);
-        let ibo_id = IBOId(buffer_ids[0]);
-        let main_vbo_id = VBOId(buffer_ids[1]);
-        let intance_vbo_id = VBOId(buffer_ids[2]);
-
-        self.create_vao_with_vbos(format, main_vbo_id, intance_vbo_id, ibo_id, 0, inst_stride, true, true, true)
-    }
-
-    pub fn create_vao_with_new_instances(&mut self, format: VertexFormat, inst_stride: gl::GLint,
-                                         base_vao: VAOId) -> VAOId {
-        debug_assert!(self.inside_frame);
-
-        let buffer_ids = self.gl.gen_buffers(1);
-        let intance_vbo_id = VBOId(buffer_ids[0]);
-        let (main_vbo_id, ibo_id) = {
-            let vao = self.vaos.get(&base_vao).unwrap();
-            (vao.main_vbo_id, vao.ibo_id)
-        };
-
-        self.create_vao_with_vbos(format, main_vbo_id, intance_vbo_id, ibo_id, 0, inst_stride, false, true, false)
-    }
-
-    pub fn update_vao_main_vertices<V>(&mut self,
-                                       vao_id: VAOId,
-                                       vertices: &[V],
-                                       usage_hint: VertexUsageHint) {
-        debug_assert!(self.inside_frame);
-
-        let vao = self.vaos.get(&vao_id).unwrap();
-        debug_assert_eq!(self.bound_vao, vao_id);
-
-        vao.main_vbo_id.bind(self.gl());
-        gl::buffer_data(self.gl(), gl::ARRAY_BUFFER, vertices, usage_hint.to_gl());
-    }
-
-    pub fn update_vao_instances<V>(&mut self,
-                                   vao_id: VAOId,
-                                   instances: &[V],
-                                   usage_hint: VertexUsageHint) {
-        debug_assert!(self.inside_frame);
-
-        let vao = self.vaos.get(&vao_id).unwrap();
-        debug_assert_eq!(self.bound_vao, vao_id);
-        debug_assert_eq!(vao.instance_stride as usize, mem::size_of::<V>());
-
-        vao.instance_vbo_id.bind(self.gl());
-        gl::buffer_data(self.gl(), gl::ARRAY_BUFFER, instances, usage_hint.to_gl());
-    }
-
-    pub fn update_vao_indices<I>(&mut self,
-                                 vao_id: VAOId,
-                                 indices: &[I],
-                                 usage_hint: VertexUsageHint) {
-        debug_assert!(self.inside_frame);
-
-        let vao = self.vaos.get(&vao_id).unwrap();
-        debug_assert_eq!(self.bound_vao, vao_id);
-
-        vao.ibo_id.bind(self.gl());
-        gl::buffer_data(self.gl(), gl::ELEMENT_ARRAY_BUFFER, indices, usage_hint.to_gl());
-    }
-
-    pub fn draw_triangles_u16(&mut self, first_vertex: i32, index_count: i32) {
-        debug_assert!(self.inside_frame);
-        self.gl.draw_elements(gl::TRIANGLES,
-                               index_count,
-                               gl::UNSIGNED_SHORT,
-                               first_vertex as u32 * 2);
-    }
-
-    pub fn draw_triangles_u32(&mut self, first_vertex: i32, index_count: i32) {
-        debug_assert!(self.inside_frame);
-        self.gl.draw_elements(gl::TRIANGLES,
-                               index_count,
-                               gl::UNSIGNED_INT,
-                               first_vertex as u32 * 4);
-    }
-
-    pub fn draw_nonindexed_lines(&mut self, first_vertex: i32, vertex_count: i32) {
-        debug_assert!(self.inside_frame);
-        self.gl.draw_arrays(gl::LINES,
-                             first_vertex,
-                             vertex_count);
-    }
-
-    pub fn draw_indexed_triangles_instanced_u16(&mut self,
-                                                index_count: i32,
-                                                instance_count: i32) {
-        debug_assert!(self.inside_frame);
-        self.gl.draw_elements_instanced(gl::TRIANGLES, index_count, gl::UNSIGNED_SHORT, 0, instance_count);
-    }
-
-    pub fn end_frame(&mut self) {
-        self.bind_draw_target(None, None);
-        self.bind_read_target(None);
-
-        debug_assert!(self.inside_frame);
-        self.inside_frame = false;
-
-        self.gl.bind_texture(gl::TEXTURE_2D, 0);
-        self.gl.use_program(0);
-
-        for i in 0..self.bound_textures.len() {
-            self.gl.active_texture(gl::TEXTURE0 + i as gl::GLuint);
-            self.gl.bind_texture(gl::TEXTURE_2D, 0);
+        if stride != texture.stride {
+            texture.stride = stride;
+            texture.data.clear();
         }
-
-        self.gl.active_texture(gl::TEXTURE0);
-
-        self.frame_id.0 += 1;
+        let new_len = new_width as usize * new_height as usize * texture.stride;
+        texture.data.resize(new_len, 0u8);
     }
 
-    pub fn assign_ubo_binding(&self, program_id: ProgramId, name: &str, value: u32) -> u32 {
-        let index = self.gl.get_uniform_block_index(program_id.0, name);
-        self.gl.uniform_block_binding(program_id.0, index, value);
-        index
+    pub fn deinit_texture(&mut self, texture_id: TextureId) {
+        let texture = self.textures.get_mut(&texture_id).expect("Didn't find texture!");
+        let (w, h) = self.color0.get_size();
+        let data = vec![0u8; w * h * texture.stride];
+        assert!(texture.data.len() == data.len());
+        mem::replace(&mut texture.data, data.to_vec());
     }
 
-    pub fn create_ubo<T>(&self, data: &[T], binding: u32) -> UBOId {
-        let ubo = self.gl.gen_buffers(1)[0];
-        self.gl.bind_buffer(gl::UNIFORM_BUFFER, ubo);
-        gl::buffer_data(self.gl(), gl::UNIFORM_BUFFER, data, gl::STATIC_DRAW);
-        self.gl.bind_buffer_base(gl::UNIFORM_BUFFER, binding, ubo);
-        UBOId(ubo)
-    }
-
-    pub fn reset_ubo(&self, binding: u32) {
-        self.gl.bind_buffer(gl::UNIFORM_BUFFER, 0);
-        self.gl.bind_buffer_base(gl::UNIFORM_BUFFER, binding, 0);
-    }
-
-    pub fn delete_buffer(&self, buffer: UBOId) {
-        self.gl.delete_buffers(&[buffer.0]);
-    }
-
-    #[cfg(target_os = "android")]
-    pub fn set_multisample(&self, enable: bool) {
-    }
-
-    #[cfg(not(target_os = "android"))]
-    pub fn set_multisample(&self, enable: bool) {
-        if self.capabilities.supports_multisampling {
-            if enable {
-                self.gl.enable(gl::MULTISAMPLE);
-            } else {
-                self.gl.disable(gl::MULTISAMPLE);
+    fn update_texture_data(texture: &mut TextureData,
+        x_offset: usize, y_offset: usize,
+        width: usize, height: usize,
+        data_pitch: usize, new_data: &[u8]
+    ) {
+        assert_eq!(data_pitch * (height-1) + width * texture.stride, new_data.len());
+        for j in 0..height {
+            if texture.stride != RGBA_STRIDE {
+                //fast path
+                let dst_offset = x_offset*texture.stride + (j+y_offset)*texture.pitch;
+                let src = &new_data[j * data_pitch ..];
+                texture.data[dst_offset .. dst_offset + width*texture.stride].copy_from_slice(&src[.. width*texture.stride]);
+                continue;
+            }
+            for i in 0..width {
+                let offset = (i + x_offset)*texture.stride + (j+y_offset)*texture.pitch;
+                let src = &new_data[j * data_pitch + i * texture.stride ..];
+                assert!(offset + 3 < texture.data.len()); // optimization
+                // convert from BGRA
+                texture.data[offset + 0] = src[2];
+                texture.data[offset + 1] = src[1];
+                texture.data[offset + 2] = src[0];
+                texture.data[offset + 3] = src[3];
             }
         }
     }
 
-    pub fn clear_target(&self,
-                        color: Option<[f32; 4]>,
-                        depth: Option<f32>) {
-        let mut clear_bits = 0;
-
-        if let Some(color) = color {
-            self.gl.clear_color(color[0], color[1], color[2], color[3]);
-            clear_bits |= gl::COLOR_BUFFER_BIT;
+    pub fn bind_texture(&mut self,
+                        sampler: TextureSampler,
+                        texture_id: TextureId) {
+        if texture_id.is_skipable() {
+            return;
         }
-
-        if let Some(depth) = depth {
-            self.gl.clear_depth(depth as f64);
-            clear_bits |= gl::DEPTH_BUFFER_BIT;
-        }
-
-        if clear_bits != 0 {
-            self.gl.clear(clear_bits);
-        }
-    }
-
-    pub fn clear_target_rect(&self,
-                             color: Option<[f32; 4]>,
-                             depth: Option<f32>,
-                             rect: DeviceIntRect) {
-        let mut clear_bits = 0;
-
-        if let Some(color) = color {
-            self.gl.clear_color(color[0], color[1], color[2], color[3]);
-            clear_bits |= gl::COLOR_BUFFER_BIT;
-        }
-
-        if let Some(depth) = depth {
-            self.gl.clear_depth(depth as f64);
-            clear_bits |= gl::DEPTH_BUFFER_BIT;
-        }
-
-        if clear_bits != 0 {
-            self.gl.enable(gl::SCISSOR_TEST);
-            self.gl.scissor(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
-            self.gl.clear(clear_bits);
-            self.gl.disable(gl::SCISSOR_TEST);
-        }
-    }
-
-    pub fn enable_depth(&self) {
-        self.gl.enable(gl::DEPTH_TEST);
-    }
-
-    pub fn disable_depth(&self) {
-        self.gl.disable(gl::DEPTH_TEST);
-    }
-
-    pub fn set_depth_func(&self, depth_func: DepthFunction) {
-        self.gl.depth_func(depth_func as gl::GLuint);
-    }
-
-    pub fn enable_depth_write(&self) {
-        self.gl.depth_mask(true);
-    }
-
-    pub fn disable_depth_write(&self) {
-        self.gl.depth_mask(false);
-    }
-
-    pub fn disable_stencil(&self) {
-        self.gl.disable(gl::STENCIL_TEST);
-    }
-
-    pub fn disable_scissor(&self) {
-        self.gl.disable(gl::SCISSOR_TEST);
-    }
-
-    pub fn set_blend(&self, enable: bool) {
-        if enable {
-            self.gl.enable(gl::BLEND);
-        } else {
-            self.gl.disable(gl::BLEND);
-        }
-    }
-
-    pub fn set_blend_mode_premultiplied_alpha(&self) {
-        self.gl.blend_func(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
-        self.gl.blend_equation(gl::FUNC_ADD);
-    }
-
-    pub fn set_blend_mode_alpha(&self) {
-        self.gl.blend_func_separate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA,
-                                    gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
-        self.gl.blend_equation(gl::FUNC_ADD);
-    }
-
-    pub fn set_blend_mode_subpixel(&self, color: ColorF) {
-        self.gl.blend_color(color.r, color.g, color.b, color.a);
-        self.gl.blend_func(gl::CONSTANT_COLOR, gl::ONE_MINUS_SRC_COLOR);
-    }
-
-    pub fn set_blend_mode_multiply(&self) {
-        self.gl.blend_func_separate(gl::ZERO, gl::SRC_COLOR,
-                                     gl::ZERO, gl::SRC_ALPHA);
-        self.gl.blend_equation(gl::FUNC_ADD);
-    }
-    pub fn set_blend_mode_max(&self) {
-        self.gl.blend_func_separate(gl::ONE, gl::ONE,
-                                     gl::ONE, gl::ONE);
-        self.gl.blend_equation_separate(gl::MAX, gl::FUNC_ADD);
-    }
-    pub fn set_blend_mode_min(&self) {
-        self.gl.blend_func_separate(gl::ONE, gl::ONE,
-                                     gl::ONE, gl::ONE);
-        self.gl.blend_equation_separate(gl::MIN, gl::FUNC_ADD);
-    }
-}
-
-impl Drop for Device {
-    fn drop(&mut self) {
-        //self.file_watcher.exit();
-    }
-}
-
-/// return (gl_internal_format, gl_format)
-fn gl_texture_formats_for_image_format(gl: &gl::Gl, format: ImageFormat) -> (gl::GLint, gl::GLuint) {
-    match format {
-        ImageFormat::A8 => {
-            if cfg!(any(target_arch="arm", target_arch="aarch64")) {
-                (get_gl_format_bgra(gl) as gl::GLint, get_gl_format_bgra(gl))
-            } else {
-                (GL_FORMAT_A as gl::GLint, GL_FORMAT_A)
+        let texture = match self.textures.get(&texture_id) {
+            Some(data) => data,
+            None => {
+                println!("Didn't find texture! {}", texture_id.name);
+                return;
             }
-        },
-        ImageFormat::RGB8 => (gl::RGB as gl::GLint, gl::RGB),
-        ImageFormat::BGRA8 => {
-            match gl.get_type() {
-                gl::GlType::Gl =>  {
-                    (gl::RGBA as gl::GLint, get_gl_format_bgra(gl))
-                }
-                gl::GlType::Gles => {
-                    (get_gl_format_bgra(gl) as gl::GLint, get_gl_format_bgra(gl))
+        };
+        println!("bind_texture {:?} {:?} {:?} {:?}", texture_id, sampler, texture.stride, texture.data.len());
+        println!("texture.data={:?}", &texture.data[0..64]);
+        match sampler {
+            TextureSampler::Color0 => Device::update_texture_surface(&mut self.encoder, &self.color0, texture.data.as_slice(), RGBA_STRIDE),
+            TextureSampler::Color1 => Device::update_texture_surface(&mut self.encoder, &self.color1, texture.data.as_slice(), RGBA_STRIDE),
+            TextureSampler::Color2 => Device::update_texture_surface(&mut self.encoder, &self.color2, texture.data.as_slice(), RGBA_STRIDE),
+            TextureSampler::CacheA8 => Device::update_texture_surface(&mut self.encoder, &self.cache_a8, texture.data.as_slice(), RGBA_STRIDE),
+            TextureSampler::CacheRGBA8 => Device::update_texture_surface(&mut self.encoder, &self.cache_rgba8, texture.data.as_slice(), RGBA_STRIDE),
+            TextureSampler::Dither => Device::update_texture_surface(&mut self.encoder, &self.dither, texture.data.as_slice(), A_STRIDE),
+            _ => println!("There are only 5 samplers supported. {:?}", sampler),
+        }
+    }
+
+    pub fn bind_yuv_texture(&mut self,
+                            sampler: TextureSampler,
+                            texture_id: TextureId) {
+        let texture = match self.textures.get_mut(&texture_id) {
+            Some(data) => data,
+            None => {
+                println!("Didn't find texture! {}", texture_id.name);
+                return;
+            }
+        };
+
+        let (w, h) = self.color0.get_size();
+        let new_data = Device::convert_data_to_rgba8(w, h, texture.data.as_slice(), texture.stride);
+        match sampler {
+            TextureSampler::Color0 => Device::update_texture_surface(&mut self.encoder, &self.color0, new_data.as_slice(), RGBA_STRIDE),
+            TextureSampler::Color1 => Device::update_texture_surface(&mut self.encoder, &self.color1, new_data.as_slice(), RGBA_STRIDE),
+            TextureSampler::Color2 => Device::update_texture_surface(&mut self.encoder, &self.color2, new_data.as_slice(), RGBA_STRIDE),
+            _ => println!("The yuv image shouldn't use this sampler: {:?}", sampler),
+        }
+    }
+
+    fn convert_data_to_rgba8(width: usize, height: usize, data: &[u8], orig_stride: usize) -> Vec<u8> {
+        let mut new_data = vec![0u8; width * height * RGBA_STRIDE];
+        for s in 0..orig_stride {
+            for h in 0..height {
+                for w in 0..width {
+                    new_data[s+(w*RGBA_STRIDE)+h*width*RGBA_STRIDE] = data[s+(w*orig_stride)+h*width*orig_stride];
                 }
             }
         }
-        ImageFormat::RGBAF32 => (gl::RGBA32F as gl::GLint, gl::RGBA),
-        ImageFormat::RG8 => (gl::RG8 as gl::GLint, gl::RG),
-        ImageFormat::Invalid => unreachable!(),
+        return new_data;
+    }
+
+    pub fn update_sampler_f32(&mut self,
+                              sampler: TextureSampler,
+                              data: &[f32]) {
+        match sampler {
+            TextureSampler::Layers => Device::update_texture_surface(&mut self.encoder, &self.layers, data, RGBA_STRIDE),
+            TextureSampler::RenderTasks => Device::update_texture_surface(&mut self.encoder, &self.render_tasks, data, RGBA_STRIDE),
+            //TextureSampler::Geometry => Device::update_texture_surface(&mut self.encoder, &self.prim_geo, data, RGBA_STRIDE),
+            //TextureSampler::SplitGeometry => Device::update_texture_surface(&mut self.encoder, &self.split_geo, data, RGBA_STRIDE),
+            //TextureSampler::Data16 => Device::update_texture_surface(&mut self.encoder, &self.data16, data, RGBA_STRIDE),
+            //TextureSampler::Data32 => Device::update_texture_surface(&mut self.encoder, &self.data32, data, RGBA_STRIDE),
+            //TextureSampler::Data64 => Device::update_texture_surface(&mut self.encoder, &self.data64, data, RGBA_STRIDE),
+            //TextureSampler::Data128 => Device::update_texture_surface(&mut self.encoder, &self.data128, data, RGBA_STRIDE),
+            //TextureSampler::ResourceRects => Device::update_texture_surface(&mut self.encoder, &self.resource_rects, data, RGBA_STRIDE),
+            _ => println!("{:?} sampler is not supported", sampler),
+        }
+    }
+
+    pub fn update_sampler_u8(&mut self,
+                             sampler: TextureSampler,
+                             data: &[u8]) {
+        match sampler {
+            //TextureSampler::Gradients => Device::update_texture_surface(&mut self.encoder, &self.gradient_data, data, RGBA_STRIDE),
+            _ => println!("{:?} sampler is not supported", sampler),
+        }
+    }
+
+    pub fn clear_target(&mut self, color: Option<[f32; 4]>, depth: Option<f32>) {
+        if let Some(color) = color {
+            self.encoder.clear(&self.main_color,
+                               //Srgba gamma correction
+                               [color[0].powf(2.2),
+                                color[1].powf(2.2),
+                                color[2].powf(2.2),
+                                color[3].powf(2.2)]);
+        }
+
+        if let Some(depth) = depth {
+            self.encoder.clear_depth(&self.main_depth, depth);
+        }
+    }
+
+    pub fn flush(&mut self) {
+        self.encoder.flush(&mut self.device);
+    }
+
+    pub fn create_program(&mut self, vert_src: &[u8], frag_src: &[u8]) -> Program {
+        let upload = self.factory.create_upload_buffer(MAX_INSTANCE_COUNT).unwrap();
+        {
+            let mut writer = self.factory.write_mapping(&upload).unwrap();
+            for i in 0..MAX_INSTANCE_COUNT {
+                writer[i] = PrimitiveInstances::new();
+            }
+        }
+
+        let instances = self.factory.create_buffer(MAX_INSTANCE_COUNT,
+                                                   gfx::buffer::Role::Vertex,
+                                                   gfx::memory::Usage::Data,
+                                                   gfx::TRANSFER_DST).unwrap();
+
+        let data = primitive::Data {
+            transform: [[0f32; 4]; 4],
+            device_pixel_ratio: DEVICE_PIXEL_RATIO,
+            vbuf: self.vertex_buffer.clone(),
+            ibuf: instances,
+            color0: (self.color0.clone().view, self.color0.clone().sampler),
+            color1: (self.color1.clone().view, self.color1.clone().sampler),
+            color2: (self.color2.clone().view, self.color2.clone().sampler),
+            dither: (self.dither.clone().view, self.dither.clone().sampler),
+            cache_a8: (self.cache_a8.clone().view, self.cache_a8.clone().sampler),
+            cache_rgba8: (self.cache_rgba8.clone().view, self.cache_rgba8.clone().sampler),
+            data16: (self.data16.clone().view, self.data16.clone().sampler),
+            data32: (self.data32.clone().view, self.data32.clone().sampler),
+            data64: (self.data64.clone().view, self.data64.clone().sampler),
+            data128: (self.data128.clone().view, self.data128.clone().sampler),
+            gradients: (self.gradient_data.clone().view, self.gradient_data.clone().sampler),
+            layers: (self.layers.clone().view, self.layers.clone().sampler),
+            prim_geometry: (self.prim_geo.clone().view, self.prim_geo.clone().sampler),
+            render_tasks: (self.render_tasks.clone().view, self.render_tasks.clone().sampler),
+            resource_rects: (self.resource_rects.clone().view, self.resource_rects.clone().sampler),
+            split_geometry: (self.split_geo.clone().view, self.split_geo.clone().sampler),
+            out_color: self.main_color.raw().clone(),
+            out_depth: self.main_depth.clone(),
+            blend_value: [0.0, 0.0, 0.0, 0.0]
+        };
+        let psos = self.create_prim_psos(vert_src, frag_src);
+        Program::new(data, psos, self.slice.clone(), upload)
+    }
+
+    pub fn draw(&mut self,
+                program: &mut Program,
+                proj: &Matrix4D<f32>,
+                instances: &[PrimitiveInstance],
+                blendmode: &BlendMode,
+                enable_depth_write: bool) {
+        program.data.transform = proj.to_row_arrays();
+
+        {
+            let mut writer = self.factory.write_mapping(&program.upload).unwrap();
+            for (i, inst) in instances.iter().enumerate() {
+                writer[i].update(inst);
+            }
+        }
+
+        {
+            program.slice.instances = Some((instances.len() as u32, 0));
+        }
+
+        if let &BlendMode::Subpixel(ref color) = blendmode {
+            program.data.blend_value = [color.r, color.g, color.b, color.a];
+        }
+
+        self.encoder.copy_buffer(&program.upload, &program.data.ibuf, 0, 0, program.upload.len()).unwrap();
+        self.encoder.draw(&program.slice, &program.get_pso(blendmode, enable_depth_write), &program.data);
+        //self.encoder.flush(&mut self.device);
+    }
+
+    pub fn draw_clip(&mut self,
+                     program: &mut ClipProgram,
+                     proj: &Matrix4D<f32>,
+                     instances: &[CacheClipInstance],
+                     blendmode: &BlendMode/*,
+                     texture_id: TextureId*/) {
+        program.data.transform = proj.to_row_arrays();
+        let (w, h) = self.color0.get_size();
+
+        //let (tex, resource, target) = self.factory.create_render_target::<ColorFormat>(w as u16, h as u16).unwrap();
+        //let (tex2, resource2, target2) = self.factory.create_depth_stencil::<DepthFormat>(w as u16, h as u16).unwrap();
+        //let mut text_data = self.textures.get_mut(&texture_id).unwrap();
+        //println!("text_data.id={:?} text_data.stride={:?}, text_data.pitch={:?}", text_data.id, text_data.stride, text_data.pitch);
+        //println!("text_data.data={:?}", &text_data.data[0..64]);
+
+        //let new_data = Device::convert_data_to_rgba8(w, h, text_data.data.as_slice(), text_data.stride);
+
+
+        //program.data.out_color = self.rtv.raw().clone();
+        //program.data.out_depth = self.dsv.clone();
+        {
+            let mut writer = self.factory.write_mapping(&program.upload).unwrap();
+            for (i, inst) in instances.iter().enumerate() {
+                writer[i].update(inst);
+            }
+        }
+
+        {
+            program.slice.instances = Some((instances.len() as u32, 0));
+        }
+
+        self.encoder.flush(&mut self.device);
+        self.encoder.copy_buffer(&program.upload, &program.data.ibuf, 0, 0, program.upload.len()).unwrap();
+        self.encoder.flush(&mut self.device);
+        self.encoder.draw(&program.slice, &program.get_pso(blendmode), &program.data);
+        self.encoder.flush(&mut self.device);
+
+        /*{
+            let mut output = vec![255u8; w as usize * h as usize * RGBA_STRIDE];
+            let res_tex = program.data.out_color.get_texture();
+            println!("res_tex={:?}", res_tex);
+            let res_tex_info = res_tex.get_info().to_raw_image_info(gfx::format::ChannelType::Unorm, 0);
+            println!("res_tex_info={:?}", res_tex_info);
+            let (w, h, _, _) = program.data.out_color.get_dimensions();
+            let buf = self.factory.create_buffer::<u8>(w as usize * h as usize * RGBA_STRIDE,
+                                                       gfx::buffer::Role::Vertex,
+                                                       gfx::memory::Usage::Download,
+                                                       gfx::TRANSFER_DST).unwrap();
+            self.encoder.copy_texture_to_buffer_raw(res_tex, None, res_tex_info, buf.raw(), 0).unwrap();
+            self.encoder.flush(&mut self.device);
+            {
+                let reader = self.factory.read_mapping(&buf).unwrap();
+                for x in 0..w as usize * h as usize * RGBA_STRIDE {
+                    if (reader[x] != 0) {
+                        println!("reader[{:?}]={:?}", x, reader[x]);
+                    }
+                }
+                let data = &*reader;
+                for j in 0..h as usize {
+                    for i in 0..w as usize {
+                        let offset = i * RGBA_STRIDE + j * w as usize * RGBA_STRIDE;
+                        let src = &data[j * w as usize * RGBA_STRIDE + i * RGBA_STRIDE ..];
+                        output[offset + 0] = src[0];
+                        output[offset + 1] = src[1];
+                        output[offset + 2] = src[2];
+                        output[offset + 3] = src[3];
+                        for x in 0..4 {
+                            if (src[x] != 0) {
+                                println!("src[{:?}, {:?},{:?}]={:?}", x, i, j, src[x]);
+                            }
+                        }
+                    }
+                }
+            }
+            //println!("output={:?}", output);
+            //println!("text_data={:?}", text_data.data);
+            let mut i = 0;
+            for x in 0..text_data.data.len() {
+                text_data.data[x] = output[i];
+                i = i+RGBA_STRIDE;
+            }
+        }*/
+        //program.data.out_color = self.main_color.raw().clone();
+        //program.data.out_depth = self.main_depth.clone();
+        //println!("text_data.data={:?}", &text_data.data[0..255]);
+    }
+
+    pub fn update_texture_surface<S, F, T>(encoder: &mut gfx::Encoder<R,CB>,
+                                           texture: &Texture<R, F>,
+                                           memory: &[T],
+                                           stride: usize)
+    where S: SurfaceTyped + TextureSurface,
+          S::DataType: Copy,
+          F: Formatted<Surface=S>,
+          F::Channel: TextureChannel,
+          T: Default + Clone + gfx::traits::Pod {
+        let (width, height) = texture.get_size();
+        let resized_data = Device::convert_sampler_data(memory, (width * height * stride) as usize);
+        let img_info = gfx::texture::ImageInfoCommon {
+            xoffset: 0,
+            yoffset: 0,
+            zoffset: 0,
+            width: width as u16,
+            height: height as u16,
+            depth: 0,
+            format: (),
+            mipmap: 0,
+        };
+
+        let data = gfx::memory::cast_slice(resized_data.as_slice());
+        encoder.update_texture::<_, F>(&texture.surface, None, img_info, data).unwrap();
+    }
+
+    fn convert_sampler_data<T: Default + Clone>(data: &[T], max_size: usize) -> Vec<T> {
+        let mut data = data.to_vec();
+        let len = data.len();
+        if len < max_size {
+            data.extend_from_slice(&vec![T::default(); max_size - len]);
+        }
+        assert!(data.len() == max_size);
+        data
     }
 }
 
-fn gl_type_for_texture_format(format: ImageFormat) -> gl::GLuint {
-    match format {
-        ImageFormat::RGBAF32 => gl::FLOAT,
-        _ => gl::UNSIGNED_BYTE,
-    }
+fn create_main_targets<T: gfx::format::RenderFormat + gfx::format::TextureFormat,
+                       S: gfx::format::DepthFormat + gfx::format::TextureFormat>
+                       (factory: &mut device_gl::Factory, width: gfx::texture::Size, height: gfx::texture::Size)
+                        -> Result<(gfx::handle::RenderTargetView<R, T>,
+                                   gfx::handle::DepthStencilView<R, S>), gfx::CombinedError>
+{
+    let kind = gfx::texture::Kind::D2(width, height, gfx::texture::AaMode::Single);
+    let levels = 1;
+    let rtv_cty = <T::Channel as gfx::format::ChannelTyped>::get_channel_type();
+    let tex_rtv = try!(factory.create_texture(kind, levels, gfx::memory::RENDER_TARGET | gfx::memory::TRANSFER_SRC, gfx::memory::Usage::Data, Some(rtv_cty)));
+    let rtv = try!(factory.view_texture_as_render_target(&tex_rtv, 0, None));
+
+    let dsv_cty = <S::Channel as gfx::format::ChannelTyped>::get_channel_type();
+    let tex_dsv = try!(factory.create_texture(kind, 1, gfx::memory::DEPTH_STENCIL, gfx::memory::Usage::Data, Some(dsv_cty)));
+    let dsv = try!(factory.view_texture_as_depth_stencil_trivial(&tex_dsv));
+    Ok((rtv, dsv))
 }
 
+pub fn init_existing<Cf, Df>(window: &glutin::Window) ->
+                            (device_gl::Device,device_gl::Factory,
+                             gfx::handle::RenderTargetView<R, Cf>, gfx::handle::DepthStencilView<R, Df>)
+where Cf: gfx::format::RenderFormat, Df: gfx::format::DepthFormat,
+{
+    unsafe { window.make_current().unwrap() };
+    let (device, factory) = device_gl::create(|s|
+        window.get_proc_address(s) as *const std::os::raw::c_void);
+
+    let (width, height) = window.get_inner_size().unwrap();
+    let aa = window.get_pixel_format().multisampling.unwrap_or(0) as gfx::texture::NumSamples;
+    let dim = ((width as f32 * window.hidpi_factor()) as gfx::texture::Size,
+               (height as f32 * window.hidpi_factor()) as gfx::texture::Size,
+               1,
+               aa.into());
+
+    let (color_view, ds_view) = device_gl::create_main_targets_raw(dim, Cf::get_format().0, Df::get_format().0);
+    (device, factory, Typed::new(color_view), Typed::new(ds_view))
+}

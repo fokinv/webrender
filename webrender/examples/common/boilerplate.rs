@@ -99,7 +99,7 @@ pub fn main_wrapper(builder_callback: fn(&RenderApi,
     };
 
     let size = DeviceUintSize::new(width, height);
-    let (mut renderer, sender) = webrender::renderer::Renderer::new(gl, opts, size).unwrap();
+    let (mut renderer, sender) = webrender::renderer::Renderer::new(&window, opts, size).unwrap();
     let api = sender.create_api();
 
     let notifier = Box::new(Notifier::new(window.create_window_proxy()));
@@ -139,8 +139,8 @@ pub fn main_wrapper(builder_callback: fn(&RenderApi,
 
                 glutin::Event::KeyboardInput(glutin::ElementState::Pressed,
                                              _, Some(glutin::VirtualKeyCode::P)) => {
-                    let enable_profiler = !renderer.get_profiler_enabled();
-                    renderer.set_profiler_enabled(enable_profiler);
+                    //let enable_profiler = !renderer.get_profiler_enabled();
+                    //renderer.set_profiler_enabled(enable_profiler);
                     api.generate_frame(None);
                 }
 

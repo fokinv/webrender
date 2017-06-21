@@ -8,7 +8,7 @@ use fnv::FnvHasher;
 use frame::FrameId;
 use gpu_cache::{GpuCache, GpuCacheHandle};
 use internal_types::{SourceTexture, TextureUpdateList};
-use profiler::TextureCacheProfileCounters;
+//use profiler::TextureCacheProfileCounters;
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry::{self, Occupied, Vacant};
 use std::fmt::Debug;
@@ -583,8 +583,8 @@ impl ResourceCache {
     }
 
     pub fn block_until_all_resources_added(&mut self,
-                                           gpu_cache: &mut GpuCache,
-                                           texture_cache_profile: &mut TextureCacheProfileCounters) {
+                                           gpu_cache: &mut GpuCache/*,
+                                           texture_cache_profile: &mut TextureCacheProfileCounters*/) {
         profile_scope!("block_until_all_resources_added");
 
         debug_assert_eq!(self.state, State::AddResources);
@@ -595,12 +595,12 @@ impl ResourceCache {
             &mut self.cached_glyphs,
             &mut self.texture_cache,
             &mut self.requested_glyphs,
-            texture_cache_profile,
+            //texture_cache_profile,
         );
 
         let mut image_requests = mem::replace(&mut self.pending_image_requests, Vec::new());
         for request in image_requests.drain(..) {
-            self.finalize_image_request(request, None, texture_cache_profile);
+            self.finalize_image_request(request, None/*, texture_cache_profile*/);
         }
 
         let mut blob_image_requests = mem::replace(&mut self.blob_image_requests, HashSet::new());
@@ -609,8 +609,8 @@ impl ResourceCache {
                 match self.blob_image_renderer.as_mut().unwrap().resolve(request.into()) {
                     Ok(image) => {
                         self.finalize_image_request(request,
-                                                    Some(ImageData::new(image.data)),
-                                                    texture_cache_profile);
+                                                    Some(ImageData::new(image.data))/*,
+                                                    texture_cache_profile*/);
                     }
                     // TODO(nical): I think that we should handle these somewhat gracefully,
                     // at least in the out-of-memory scenario.
@@ -650,8 +650,8 @@ impl ResourceCache {
 
     fn update_texture_cache(&mut self,
                             request: &ImageRequest,
-                            image_data: Option<ImageData>,
-                            texture_cache_profile: &mut TextureCacheProfileCounters) {
+                            image_data: Option<ImageData>/*,
+                            texture_cache_profile: &mut TextureCacheProfileCounters*/) {
         let image_template = self.resources.image_templates.get_mut(request.key).unwrap();
         let image_data = image_data.unwrap_or_else(||{
             image_template.data.clone()
@@ -719,8 +719,8 @@ impl ResourceCache {
                 let image_id = self.texture_cache.insert(descriptor,
                                                          filter,
                                                          image_data,
-                                                         [0.0; 2],
-                                                         texture_cache_profile);
+                                                         [0.0; 2]/*,
+                                                         texture_cache_profile*/);
 
                 entry.insert(CachedImageInfo {
                     texture_cache_id: image_id,
@@ -735,8 +735,8 @@ impl ResourceCache {
     }
     fn finalize_image_request(&mut self,
                               request: ImageRequest,
-                              image_data: Option<ImageData>,
-                              texture_cache_profile: &mut TextureCacheProfileCounters) {
+                              image_data: Option<ImageData>/*,
+                              texture_cache_profile: &mut TextureCacheProfileCounters*/) {
         match self.resources.image_templates.get(request.key).unwrap().data {
             ImageData::External(ext_image) => {
                 match ext_image.image_type {
@@ -747,15 +747,15 @@ impl ResourceCache {
                     }
                     ExternalImageType::ExternalBuffer => {
                         self.update_texture_cache(&request,
-                                                  image_data,
-                                                  texture_cache_profile);
+                                                  image_data/*,
+                                                  texture_cache_profile*/);
                     }
                 }
             }
             ImageData::Raw(..) | ImageData::Blob(..) => {
                 self.update_texture_cache(&request,
-                                           image_data,
-                                           texture_cache_profile);
+                                           image_data/*,
+                                           texture_cache_profile*/);
             }
         }
     }
