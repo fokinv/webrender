@@ -223,6 +223,15 @@ impl WindowWrapper {
             WindowWrapper::Headless(_, ref gl) => gl.clone(),
         }
     }
+
+    fn get_window(&self) -> &glutin::Window {
+        match *self {
+            WindowWrapper::Window(ref window, _) => window,
+            WindowWrapper::Headless(_, _) => {
+                unreachable!()
+            }
+        }
+    }
 }
 
 fn make_window(size: DeviceUintSize,
@@ -518,7 +527,7 @@ fn main() {
                     },
                     VirtualKeyCode::P => {
                         profiler = !profiler;
-                        wrench.renderer.set_profiler_enabled(profiler);
+                        //wrench.renderer.set_profiler_enabled(profiler);
                     },
                     VirtualKeyCode::L => {
                         do_loop = !do_loop;

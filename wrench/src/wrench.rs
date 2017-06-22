@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use time;
 use webrender;
-use webrender::renderer::{CpuProfile, GpuProfile, GraphicsApiInfo};
+//use webrender::renderer::{CpuProfile, GpuProfile, GraphicsApiInfo};
 use webrender_traits::*;
 use yaml_frame_writer::YamlFrameWriterReceiver;
 use yaml_rust::Yaml;
@@ -127,7 +127,7 @@ pub struct Wrench {
 
     image_map: HashMap<(PathBuf, Option<i64>), (ImageKey, LayoutSize)>,
 
-    graphics_api: GraphicsApiInfo,
+    //graphics_api: GraphicsApiInfo,
 
     pub rebuild_display_lists: bool,
     pub verbose: bool,
@@ -177,7 +177,7 @@ impl Wrench {
             .. Default::default()
         };
 
-        let (renderer, sender) = webrender::renderer::Renderer::new(window.clone_gl(), opts, size).unwrap();
+        let (renderer, sender) = webrender::renderer::Renderer::new(window.get_window(), opts, size).unwrap();
         let api = sender.create_api();
 
         let proxy = window.create_window_proxy();
@@ -191,7 +191,7 @@ impl Wrench {
         let notifier = Box::new(Notifier::new(proxy, timing_receiver, verbose));
         renderer.set_render_notifier(notifier);
 
-        let graphics_api = renderer.get_graphics_api_info();
+        //let graphics_api = renderer.get_graphics_api_info();
 
         let mut wrench = Wrench {
             window_size: size,
@@ -208,7 +208,7 @@ impl Wrench {
 
             root_pipeline_id: PipelineId(0, 0),
 
-            graphics_api: graphics_api,
+            //graphics_api: graphics_api,
             frame_start_sender: timing_sender,
         };
 
@@ -219,8 +219,8 @@ impl Wrench {
     }
 
     pub fn set_title(&mut self, extra: &str) {
-        self.window_title_to_set = Some(format!("Wrench: {} ({}x) - {} - {}", extra,
-            self.device_pixel_ratio, self.graphics_api.renderer, self.graphics_api.version));
+        self.window_title_to_set = Some(format!("Wrench: {} ({}x)", extra,
+            self.device_pixel_ratio/*, self.graphics_api.renderer, self.graphics_api.version*/));
     }
 
     pub fn take_title(&mut self) -> Option<String> {
@@ -385,9 +385,9 @@ impl Wrench {
         self.api.generate_frame(None);
     }
 
-    pub fn get_frame_profiles(&mut self) -> (Vec<CpuProfile>, Vec<GpuProfile>) {
+    /*pub fn get_frame_profiles(&mut self) -> (Vec<CpuProfile>, Vec<GpuProfile>) {
         self.renderer.get_frame_profiles()
-    }
+    }*/
 
     pub fn render(&mut self) {
         self.renderer.update();
@@ -408,16 +408,16 @@ impl Wrench {
         ];
 
         let color_and_offset = [ (*BLACK_COLOR, 2.0), (*WHITE_COLOR, 0.0) ];
-        let dr = self.renderer.debug_renderer();
+        //let dr = self.renderer.debug_renderer();
 
-        for ref co in &color_and_offset {
+        /*for ref co in &color_and_offset {
             let x = self.device_pixel_ratio * (15.0 + co.1);
             let mut y = self.device_pixel_ratio * (15.0 + co.1 + dr.line_height());
             for ref line in &help_lines {
                 dr.add_text(x, y, line, &co.0);
                 y += self.device_pixel_ratio * dr.line_height();
             }
-        }
+        }*/
     }
 }
 
