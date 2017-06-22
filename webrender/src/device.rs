@@ -24,7 +24,7 @@ use std::rc::Rc;
 use webrender_traits::{ColorF, ImageFormat};
 use webrender_traits::{DeviceIntPoint, DeviceIntRect, DeviceIntSize, DeviceUintSize};
 
-use euclid::Matrix4D;
+//use euclid::Matrix4D;
 
 use rand::Rng;
 use std;
@@ -252,16 +252,9 @@ pub struct Device {
     pub dither: Texture<R, A8>,
     pub cache_a8: Texture<R, Rgba8>,
     pub cache_rgba8: Texture<R, Rgba8>,
-    pub data16: Texture<R, Rgba32F>,
-    pub data32: Texture<R, Rgba32F>,
-    pub data64: Texture<R, Rgba32F>,
-    pub data128: Texture<R, Rgba32F>,
-    pub gradient_data: Texture<R, Srgba8>,
     pub layers: Texture<R, Rgba32F>,
-    pub prim_geo: Texture<R, Rgba32F>,
     pub render_tasks: Texture<R, Rgba32F>,
-    pub resource_rects: Texture<R, Rgba32F>,
-    pub split_geo: Texture<R, Rgba32F>,
+    pub resource_cache: Texture<R, Rgba32F>,
     pub max_texture_size: u32,
     pub main_color: gfx::handle::RenderTargetView<R, ColorFormat>,
     pub main_depth: gfx::handle::DepthStencilView<R, DepthFormat>,
@@ -303,16 +296,9 @@ impl Device {
         let cache_rgba8 = Texture::empty(&mut factory, texture_size, TextureFilter::Linear, TextureTarget::Array).unwrap();
 
         // TODO define some maximum boundaries for texture height
-        let data16_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 4], TextureFilter::Nearest, TextureTarget::Default).unwrap();
-        let data32_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
-        let data64_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
-        let data128_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 4], TextureFilter::Nearest, TextureTarget::Default).unwrap();
-        let gradient_data = Texture::empty(&mut factory, [2* GRADIENT_DATA_SIZE, TEXTURE_HEIGTH * 10], TextureFilter::Nearest, TextureTarget::Default).unwrap();
         let layers_tex = Texture::empty(&mut factory, [LAYER_TEXTURE_WIDTH, 64], TextureFilter::Nearest, TextureTarget::Default).unwrap();
-        let prim_geo_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
         let render_tasks_tex = Texture::empty(&mut factory, [RENDER_TASK_TEXTURE_WIDTH, TEXTURE_HEIGTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
-        let resource_rects = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 2], TextureFilter::Nearest, TextureTarget::Default).unwrap();
-        let split_geo_tex = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 2], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let resource_cache = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 2], TextureFilter::Nearest, TextureTarget::Default).unwrap();
 
         let mut textures = HashMap::new();
         let (w, h) = color0.get_size();
@@ -350,16 +336,9 @@ impl Device {
             dither: dither,
             cache_a8: cache_a8,
             cache_rgba8: cache_rgba8,
-            data16: data16_tex,
-            data32: data32_tex,
-            data64: data64_tex,
-            data128: data128_tex,
-            gradient_data: gradient_data,
             layers: layers_tex,
-            prim_geo: prim_geo_tex,
             render_tasks: render_tasks_tex,
-            resource_rects: resource_rects,
-            split_geo: split_geo_tex,
+            resource_cache: resource_cache,
             max_texture_size: max_texture_size,
             main_color: main_color,
             main_depth: main_depth,
@@ -418,6 +397,7 @@ impl Device {
                              format: ImageFormat) -> TextureId {
         let (w, h) = self.color0.get_size();
         let texture_id = self.generate_texture_id();
+        println!("create_texture_id format={:?}", format);
         let stride = match format {
             ImageFormat::A8 => A_STRIDE,
             ImageFormat::BGRA8 => RGBA_STRIDE,
@@ -609,12 +589,17 @@ impl Device {
         return new_data;
     }
 
+    pub fn update_gpu_cache(&mut self, row_index: u16, data: &[f32]) {
+        Device::update_gpu_texture(&mut self.encoder, &self.resource_cache, row_index, data);
+    }
+
     pub fn update_sampler_f32(&mut self,
                               sampler: TextureSampler,
                               data: &[f32]) {
         match sampler {
             TextureSampler::Layers => Device::update_texture_surface(&mut self.encoder, &self.layers, data, RGBA_STRIDE),
             TextureSampler::RenderTasks => Device::update_texture_surface(&mut self.encoder, &self.render_tasks, data, RGBA_STRIDE),
+            //TextureSampler::ResourceCache => Device::update_texture_surface(&mut self.encoder, &self.resource_cache, data, RGBA_STRIDE),
             //TextureSampler::Geometry => Device::update_texture_surface(&mut self.encoder, &self.prim_geo, data, RGBA_STRIDE),
             //TextureSampler::SplitGeometry => Device::update_texture_surface(&mut self.encoder, &self.split_geo, data, RGBA_STRIDE),
             //TextureSampler::Data16 => Device::update_texture_surface(&mut self.encoder, &self.data16, data, RGBA_STRIDE),
@@ -679,16 +664,9 @@ impl Device {
             dither: (self.dither.clone().view, self.dither.clone().sampler),
             cache_a8: (self.cache_a8.clone().view, self.cache_a8.clone().sampler),
             cache_rgba8: (self.cache_rgba8.clone().view, self.cache_rgba8.clone().sampler),
-            data16: (self.data16.clone().view, self.data16.clone().sampler),
-            data32: (self.data32.clone().view, self.data32.clone().sampler),
-            data64: (self.data64.clone().view, self.data64.clone().sampler),
-            data128: (self.data128.clone().view, self.data128.clone().sampler),
-            gradients: (self.gradient_data.clone().view, self.gradient_data.clone().sampler),
             layers: (self.layers.clone().view, self.layers.clone().sampler),
-            prim_geometry: (self.prim_geo.clone().view, self.prim_geo.clone().sampler),
             render_tasks: (self.render_tasks.clone().view, self.render_tasks.clone().sampler),
-            resource_rects: (self.resource_rects.clone().view, self.resource_rects.clone().sampler),
-            split_geometry: (self.split_geo.clone().view, self.split_geo.clone().sampler),
+            resource_cache: (self.resource_cache.clone().view, self.resource_cache.clone().sampler),
             out_color: self.main_color.raw().clone(),
             out_depth: self.main_depth.clone(),
             blend_value: [0.0, 0.0, 0.0, 0.0]
@@ -699,7 +677,7 @@ impl Device {
 
     pub fn draw(&mut self,
                 program: &mut Program,
-                proj: &Matrix4D<f32>,
+                proj: &Transform3D<f32>,
                 instances: &[PrimitiveInstance],
                 blendmode: &BlendMode,
                 enable_depth_write: bool) {
@@ -727,7 +705,7 @@ impl Device {
 
     pub fn draw_clip(&mut self,
                      program: &mut ClipProgram,
-                     proj: &Matrix4D<f32>,
+                     proj: &Transform3D<f32>,
                      instances: &[CacheClipInstance],
                      blendmode: &BlendMode/*,
                      texture_id: TextureId*/) {
@@ -810,6 +788,32 @@ impl Device {
         //program.data.out_color = self.main_color.raw().clone();
         //program.data.out_depth = self.main_depth.clone();
         //println!("text_data.data={:?}", &text_data.data[0..255]);
+    }
+
+    pub fn update_gpu_texture<S, F, T>(encoder: &mut gfx::Encoder<R,CB>,
+                                       texture: &Texture<R, F>,
+                                       row_index: u16,
+                                       memory: &[T])
+    where S: SurfaceTyped + TextureSurface,
+          S::DataType: Copy,
+          F: Formatted<Surface=S>,
+          F::Channel: TextureChannel,
+          T: Default + Clone + gfx::traits::Pod {
+        //println!("update_gpu_texture row_index={:?} memory.len={:?}", row_index, memory.len());
+        assert!(memory.len() == MAX_VERTEX_TEXTURE_WIDTH * RGBA_STRIDE);
+        let img_info = gfx::texture::ImageInfoCommon {
+            xoffset: 0,
+            yoffset: row_index,
+            zoffset: 0,
+            width: MAX_VERTEX_TEXTURE_WIDTH as u16,
+            height: 1,
+            depth: 0,
+            format: (),
+            mipmap: 0,
+        };
+
+        let data = gfx::memory::cast_slice(memory);
+        encoder.update_texture::<_, F>(&texture.surface, None, img_info, data).unwrap();
     }
 
     pub fn update_texture_surface<S, F, T>(encoder: &mut gfx::Encoder<R,CB>,

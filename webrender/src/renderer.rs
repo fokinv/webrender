@@ -168,7 +168,7 @@ impl CacheRow {
 
 /// The device-specific representation of the cache texture in gpu_cache.rs
 struct CacheTexture {
-    texture_id: TextureId,
+    //texture_id: TextureId,
     //pbo_id: PBOId,
     rows: Vec<CacheRow>,
     cpu_blocks: Vec<GpuBlockData>,
@@ -176,11 +176,11 @@ struct CacheTexture {
 
 impl CacheTexture {
     fn new(device: &mut Device) -> CacheTexture {
-        let texture_id = device.create_texture_id(TextureTarget::Default, ImageFormat::RGBAF32);
+        //let texture_id = device.create_texture_id(TextureTarget::Default, ImageFormat::RGBAF32);
         //let pbo_id = device.create_pbo();
 
         CacheTexture {
-            texture_id: texture_id,
+            //texture_id: texture_id,
             //pbo_id: pbo_id,
             rows: Vec::new(),
             cpu_blocks: Vec::new(),
@@ -222,9 +222,10 @@ impl CacheTexture {
         //TODO fix this
         let current_dimensions = DeviceUintSize::new(MAX_VERTEX_TEXTURE_WIDTH as u32, MAX_VERTEX_TEXTURE_WIDTH as u32);
         if updates.height > current_dimensions.height {
+            panic!("TODO implement resize");
             // Create a f32 texture that can be used for the vertex shader
             // to fetch data from.
-            device.init_texture(self.texture_id,
+            /*device.init_texture(self.texture_id,
                                 MAX_VERTEX_TEXTURE_WIDTH as u32,
                                 updates.height as u32,
                                 ImageFormat::RGBAF32,
@@ -240,7 +241,7 @@ impl CacheTexture {
                 for row in &mut self.rows {
                     row.is_dirty = true;
                 }
-            }
+            }*/
         }
 
         for update in &updates.updates {
@@ -274,6 +275,8 @@ impl CacheTexture {
                 // Keeping the size the same gives the driver a hint for future
                 // use of this PBO.
                 //device.orphan_pbo(mem::size_of::<GpuBlockData>() * MAX_VERTEX_TEXTURE_WIDTH);
+
+                device.update_gpu_cache(row_index as u16, gfx::memory::cast_slice(cpu_blocks));
 
                 row.is_dirty = false;
             }
@@ -947,7 +950,8 @@ impl Renderer {
 
                         self.update_gpu_cache(frame);
 
-                        self.device.bind_texture(TextureSampler::ResourceCache, self.gpu_cache_texture.texture_id);
+                        //self.device.bind_texture(TextureSampler::ResourceCache, self.gpu_cache_texture.texture_id);
+                        self.device.flush();
 
                         //frame_id
                     //};
@@ -1199,6 +1203,20 @@ impl Renderer {
                           BlendMode::Max => true,
                           BlendMode::None => false,
                       });
+        match batch.key.kind {
+            AlphaBatchKind::YuvImage(..) => {
+                for i in 0..batch.key.textures.colors.len() {
+                    let texture_id = self.resolve_source_texture(&batch.key.textures.colors[i]);
+                    self.device.bind_yuv_texture(TextureSampler::color(i), texture_id);
+                }
+            },
+            _ => {
+                for i in 0..batch.key.textures.colors.len() {
+                    let texture_id = self.resolve_source_texture(&batch.key.textures.colors[i]);
+                    self.device.bind_texture(TextureSampler::color(i), texture_id);
+                }
+            },
+        }
 
         {
             let mut program = match batch.key.kind {

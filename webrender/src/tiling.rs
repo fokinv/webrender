@@ -6,7 +6,7 @@ use app_units::Au;
 use border::{BorderCornerInstance, BorderCornerSide};
 use device::TextureId;
 use fnv::FnvHasher;
-use gpu_cache::{GpuCache, GpuCacheHandle, GpuCacheUpdateList};
+use gpu_cache::{GpuCache, GpuCacheHandle, GpuCacheUpdateList, GpuBlockData};
 use internal_types::{ANGLE_FLOAT_TO_FIXED, BatchTextures, CacheTextureId, LowLevelFilterOp};
 use internal_types::SourceTexture;
 use mask_cache::MaskCacheInfo;
@@ -40,7 +40,7 @@ macro_rules! impl_pod {
     ( ty = $($ty:ty)* ) => { $( unsafe impl Pod for $ty {} )* };
 }
 
-impl_pod! { ty = PackedLayer RenderTaskData }
+impl_pod! { ty = PackedLayer RenderTaskData GpuBlockData }
 
 pub type DisplayListMap = HashMap<PipelineId,
                                   BuiltDisplayList,

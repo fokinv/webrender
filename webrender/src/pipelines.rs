@@ -102,6 +102,7 @@ gfx_defines! {
         layer_index: i32 = "aClipLayerIndex",
         data_index: i32 = "aClipDataIndex",
         segment_index: i32 = "aClipSegmentIndex",
+        resource_address: i32 = "aClipResourceAddress",
     }
 
     pipeline primitive {
@@ -117,16 +118,9 @@ gfx_defines! {
         cache_a8: gfx::TextureSampler<[f32; 4]> = "sCacheA8",
         cache_rgba8: gfx::TextureSampler<[f32; 4]> = "sCacheRGBA8",
 
-        data16: gfx::TextureSampler<[f32; 4]> = "sData16",
-        data32: gfx::TextureSampler<[f32; 4]> = "sData32",
-        data64: gfx::TextureSampler<[f32; 4]> = "sData64",
-        data128: gfx::TextureSampler<[f32; 4]> = "sData128",
-        gradients : gfx::TextureSampler<[f32; 4]> = "sGradients",
         layers: gfx::TextureSampler<[f32; 4]> = "sLayers",
-        prim_geometry: gfx::TextureSampler<[f32; 4]> = "sPrimGeometry",
         render_tasks: gfx::TextureSampler<[f32; 4]> = "sRenderTasks",
-        resource_rects: gfx::TextureSampler<[f32; 4]> = "sResourceRects",
-        split_geometry: gfx::TextureSampler<[f32; 4]> = "sSplitGeometry",
+        resource_cache: gfx::TextureSampler<[f32; 4]> = "sResourceCache",
 
         out_color: gfx::RawRenderTarget = ("oFragColor",
                                            Format(gfx::format::SurfaceType::R8_G8_B8_A8,
@@ -147,15 +141,9 @@ gfx_defines! {
         cache_a8: gfx::TextureSampler<[f32; 4]> = "sCacheA8",
         cache_rgba8: gfx::TextureSampler<[f32; 4]> = "sCacheRGBA8",
 
-        data16: gfx::TextureSampler<[f32; 4]> = "sData16",
-        data32: gfx::TextureSampler<[f32; 4]> = "sData32",
-        data64: gfx::TextureSampler<[f32; 4]> = "sData64",
-        data128: gfx::TextureSampler<[f32; 4]> = "sData128",
         layers: gfx::TextureSampler<[f32; 4]> = "sLayers",
-        prim_geometry: gfx::TextureSampler<[f32; 4]> = "sPrimGeometry",
         render_tasks: gfx::TextureSampler<[f32; 4]> = "sRenderTasks",
-        resource_rects: gfx::TextureSampler<[f32; 4]> = "sResourceRects",
-        split_geometry: gfx::TextureSampler<[f32; 4]> = "sSplitGeometry",
+        resource_cache: gfx::TextureSampler<[f32; 4]> = "sResourceCache",
 
         out_color: gfx::RawRenderTarget = ("oFragColor",
                                            Format(gfx::format::SurfaceType::R8_G8_B8_A8,
@@ -175,15 +163,9 @@ gfx_defines! {
         cache_a8: gfx::TextureSampler<[f32; 4]> = "sCacheA8",
         cache_rgba8: gfx::TextureSampler<[f32; 4]> = "sCacheRGBA8",
 
-        data16: gfx::TextureSampler<[f32; 4]> = "sData16",
-        data32: gfx::TextureSampler<[f32; 4]> = "sData32",
-        data64: gfx::TextureSampler<[f32; 4]> = "sData64",
-        data128: gfx::TextureSampler<[f32; 4]> = "sData128",
         layers: gfx::TextureSampler<[f32; 4]> = "sLayers",
-        prim_geometry: gfx::TextureSampler<[f32; 4]> = "sPrimGeometry",
         render_tasks: gfx::TextureSampler<[f32; 4]> = "sRenderTasks",
-        resource_rects: gfx::TextureSampler<[f32; 4]> = "sResourceRects",
-        split_geometry: gfx::TextureSampler<[f32; 4]> = "sSplitGeometry",
+        resource_cache: gfx::TextureSampler<[f32; 4]> = "sResourceCache",
 
         out_color: gfx::RawRenderTarget = ("oFragColor",
                                            Format(gfx::format::SurfaceType::R8_G8_B8_A8,
@@ -206,16 +188,9 @@ gfx_defines! {
         cache_a8: gfx::TextureSampler<[f32; 4]> = "sCacheA8",
         cache_rgba8: gfx::TextureSampler<[f32; 4]> = "sCacheRGBA8",
 
-        data16: gfx::TextureSampler<[f32; 4]> = "sData16",
-        data32: gfx::TextureSampler<[f32; 4]> = "sData32",
-        data64: gfx::TextureSampler<[f32; 4]> = "sData64",
-        data128: gfx::TextureSampler<[f32; 4]> = "sData128",
-        gradients : gfx::TextureSampler<[f32; 4]> = "sGradients",
         layers: gfx::TextureSampler<[f32; 4]> = "sLayers",
-        prim_geometry: gfx::TextureSampler<[f32; 4]> = "sPrimGeometry",
         render_tasks: gfx::TextureSampler<[f32; 4]> = "sRenderTasks",
-        resource_rects: gfx::TextureSampler<[f32; 4]> = "sResourceRects",
-        split_geometry: gfx::TextureSampler<[f32; 4]> = "sSplitGeometry",
+        resource_cache: gfx::TextureSampler<[f32; 4]> = "sResourceCache",
 
         out_color: gfx::RawRenderTarget = ("oFragColor",
                                            Format(gfx::format::SurfaceType::R8_G8_B8_A8,
@@ -276,6 +251,7 @@ impl ClipInstances {
             layer_index: 0,
             data_index: 0,
             segment_index: 0,
+            resource_address: 0,
         }
     }
 
@@ -284,6 +260,7 @@ impl ClipInstances {
         self.layer_index = instance.layer_index;
         self.data_index = instance.address;
         self.segment_index = instance.segment;
+        self.resource_address = instance.resource_address;
     }
 }
 
@@ -571,15 +548,9 @@ impl Device {
             color0: (self.color0.clone().view, self.color0.clone().sampler),
             cache_a8: (self.cache_a8.clone().view, self.cache_a8.clone().sampler),
             cache_rgba8: (self.cache_rgba8.clone().view, self.cache_rgba8.clone().sampler),
-            data16: (self.data16.clone().view, self.data16.clone().sampler),
-            data32: (self.data32.clone().view, self.data32.clone().sampler),
-            data64: (self.data64.clone().view, self.data64.clone().sampler),
-            data128: (self.data128.clone().view, self.data128.clone().sampler),
             layers: (self.layers.clone().view, self.layers.clone().sampler),
-            prim_geometry: (self.prim_geo.clone().view, self.prim_geo.clone().sampler),
             render_tasks: (self.render_tasks.clone().view, self.render_tasks.clone().sampler),
-            resource_rects: (self.resource_rects.clone().view, self.resource_rects.clone().sampler),
-            split_geometry: (self.split_geo.clone().view, self.split_geo.clone().sampler),
+            resource_cache: (self.resource_cache.clone().view, self.resource_cache.clone().sampler),
             out_color: self.main_color.raw().clone(),
             out_depth: self.main_depth.clone(),
         };
@@ -609,15 +580,9 @@ impl Device {
             color0: (self.color0.clone().view, self.color0.clone().sampler),
             cache_a8: (self.cache_a8.clone().view, self.cache_a8.clone().sampler),
             cache_rgba8: (self.cache_rgba8.clone().view, self.cache_rgba8.clone().sampler),
-            data16: (self.data16.clone().view, self.data16.clone().sampler),
-            data32: (self.data32.clone().view, self.data32.clone().sampler),
-            data64: (self.data64.clone().view, self.data64.clone().sampler),
-            data128: (self.data128.clone().view, self.data128.clone().sampler),
             layers: (self.layers.clone().view, self.layers.clone().sampler),
-            prim_geometry: (self.prim_geo.clone().view, self.prim_geo.clone().sampler),
             render_tasks: (self.render_tasks.clone().view, self.render_tasks.clone().sampler),
-            resource_rects: (self.resource_rects.clone().view, self.resource_rects.clone().sampler),
-            split_geometry: (self.split_geo.clone().view, self.split_geo.clone().sampler),
+            resource_cache: (self.resource_cache.clone().view, self.resource_cache.clone().sampler),
             out_color: self.main_color.raw().clone(),
             out_depth: self.main_depth.clone(),
         };
@@ -650,16 +615,9 @@ impl Device {
             dither: (self.dither.clone().view, self.dither.clone().sampler),
             cache_a8: (self.cache_a8.clone().view, self.cache_a8.clone().sampler),
             cache_rgba8: (self.cache_rgba8.clone().view, self.cache_rgba8.clone().sampler),
-            data16: (self.data16.clone().view, self.data16.clone().sampler),
-            data32: (self.data32.clone().view, self.data32.clone().sampler),
-            data64: (self.data64.clone().view, self.data64.clone().sampler),
-            data128: (self.data128.clone().view, self.data128.clone().sampler),
-            gradients: (self.gradient_data.clone().view, self.gradient_data.clone().sampler),
             layers: (self.layers.clone().view, self.layers.clone().sampler),
-            prim_geometry: (self.prim_geo.clone().view, self.prim_geo.clone().sampler),
             render_tasks: (self.render_tasks.clone().view, self.render_tasks.clone().sampler),
-            resource_rects: (self.resource_rects.clone().view, self.resource_rects.clone().sampler),
-            split_geometry: (self.split_geo.clone().view, self.split_geo.clone().sampler),
+            resource_cache: (self.resource_cache.clone().view, self.resource_cache.clone().sampler),
             out_color: self.main_color.raw().clone(),
             out_depth: self.main_depth.clone(),
         };
