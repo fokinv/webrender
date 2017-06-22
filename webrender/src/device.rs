@@ -298,7 +298,7 @@ impl Device {
         // TODO define some maximum boundaries for texture height
         let layers_tex = Texture::empty(&mut factory, [LAYER_TEXTURE_WIDTH, 64], TextureFilter::Nearest, TextureTarget::Default).unwrap();
         let render_tasks_tex = Texture::empty(&mut factory, [RENDER_TASK_TEXTURE_WIDTH, TEXTURE_HEIGTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
-        let resource_cache = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, TEXTURE_HEIGTH * 2], TextureFilter::Nearest, TextureTarget::Default).unwrap();
+        let resource_cache = Texture::empty(&mut factory, [MAX_VERTEX_TEXTURE_WIDTH, MAX_VERTEX_TEXTURE_WIDTH], TextureFilter::Nearest, TextureTarget::Default).unwrap();
 
         let mut textures = HashMap::new();
         let (w, h) = color0.get_size();
