@@ -271,7 +271,7 @@ pub struct Program {
     pub pso_prem_alpha: (PrimPSO, PrimPSO),
     pub pso_subpixel: (PrimPSO, PrimPSO),
     pub slice: gfx::Slice<R>,
-    pub upload: gfx::handle::Buffer<R, PrimitiveInstances>,
+    pub upload: (gfx::handle::Buffer<R, PrimitiveInstances>, usize),
 }
 
 impl Program {
@@ -287,7 +287,7 @@ impl Program {
             pso_prem_alpha: (psos.4, psos.5),
             pso_subpixel: (psos.6, psos.7),
             slice: slice,
-            upload: upload,
+            upload: (upload, 0),
         }
     }
 
@@ -299,6 +299,10 @@ impl Program {
             _ => if depth_write { &self.pso.0 } else { &self.pso.1 },
         }
     }
+
+    pub fn reset_upload_offset(&mut self) {
+        self.upload.1 = 0;
+    }
 }
 
 #[allow(dead_code)]
@@ -307,7 +311,7 @@ pub struct CacheProgram {
     pub pso: CachePSO,
     pub pso_alpha: CachePSO,
     pub slice: gfx::Slice<R>,
-    pub upload: gfx::handle::Buffer<R, PrimitiveInstances>,
+    pub upload: (gfx::handle::Buffer<R, PrimitiveInstances>, usize),
 }
 
 #[allow(dead_code)]
@@ -322,7 +326,7 @@ impl CacheProgram {
             pso: psos.0,
             pso_alpha: psos.1,
             slice: slice,
-            upload: upload,
+            upload: (upload, 0),
         }
     }
 
@@ -332,6 +336,10 @@ impl CacheProgram {
             _ => &self.pso,
         }
     }
+
+    pub fn reset_upload_offset(&mut self) {
+        self.upload.1 = 0;
+    }
 }
 
 #[allow(dead_code)]
@@ -339,7 +347,27 @@ pub struct BlurProgram {
     pub data: blur::Data<R>,
     pub pso: BlurPSO,
     pub slice: gfx::Slice<R>,
-    pub upload: gfx::handle::Buffer<R, BlurInstances>,
+    pub upload: (gfx::handle::Buffer<R, BlurInstances>, usize),
+}
+
+#[allow(dead_code)]
+impl BlurProgram {
+    pub fn new(data: blur::Data<R>,
+           pso: BlurPSO,
+           slice: gfx::Slice<R>,
+           upload: gfx::handle::Buffer<R, BlurInstances>)
+           -> BlurProgram {
+        BlurProgram {
+            data: data,
+            pso: pso,
+            slice: slice,
+            upload: (upload, 0),
+        }
+    }
+
+    pub fn reset_upload_offset(&mut self) {
+        self.upload.1 = 0;
+    }
 }
 
 #[allow(dead_code)]
@@ -349,7 +377,7 @@ pub struct ClipProgram {
     pub pso_multiply: ClipPSO,
     pub pso_max: ClipPSO,
     pub slice: gfx::Slice<R>,
-    pub upload: gfx::handle::Buffer<R, ClipInstances>,
+    pub upload: (gfx::handle::Buffer<R, ClipInstances>, usize),
 }
 
 #[allow(dead_code)]
@@ -365,7 +393,7 @@ impl ClipProgram {
             pso_multiply: psos.1,
             pso_max: psos.2,
             slice: slice,
-            upload: upload,
+            upload: (upload, 0),
         }
     }
 
@@ -375,6 +403,10 @@ impl ClipProgram {
             BlendMode::Max => &self.pso_max,
             _ => &self.pso,
         }
+    }
+
+    pub fn reset_upload_offset(&mut self) {
+        self.upload.1 = 0;
     }
 }
 
@@ -587,7 +619,7 @@ impl Device {
             out_depth: self.main_depth.clone(),
         };
         let pso = self.factory.create_pipeline_simple(vert_src, frag_src, blur::new()).unwrap();
-        BlurProgram {data: data, pso: pso, slice: self.slice.clone(), upload:upload}
+        BlurProgram {data: data, pso: pso, slice: self.slice.clone(), upload:(upload,0)}
     }
 
     pub fn create_clip_program(&mut self, vert_src: &[u8], frag_src: &[u8]) -> ClipProgram {
@@ -629,7 +661,7 @@ impl Device {
        program.data.transform = proj.to_row_arrays();
 
         {
-            let mut writer = self.factory.write_mapping(&program.upload).unwrap();
+            let mut writer = self.factory.write_mapping(&program.upload.0).unwrap();
             for (i, inst) in instances.iter().enumerate() {
                 writer[i].update(inst);
             }
@@ -639,7 +671,7 @@ impl Device {
             program.slice.instances = Some((instances.len() as u32, 0));
         }
 
-        self.encoder.copy_buffer(&program.upload, &program.data.ibuf, 0, 0, program.upload.len()).unwrap();
+        self.encoder.copy_buffer(&program.upload.0, &program.data.ibuf, program.upload.1, 0, instances.len()).unwrap();
         self.encoder.draw(&program.slice, &program.get_pso(blendmode), &program.data);
     }
 
@@ -647,7 +679,7 @@ impl Device {
        program.data.transform = proj.to_row_arrays();
 
         {
-            let mut writer = self.factory.write_mapping(&program.upload).unwrap();
+            let mut writer = self.factory.write_mapping(&program.upload.0).unwrap();
             for (i, blur_command) in blur_commands.iter().enumerate() {
                 writer[i].update(blur_command);
             }
@@ -657,7 +689,7 @@ impl Device {
             program.slice.instances = Some((blur_commands.len() as u32, 0));
         }
 
-        self.encoder.copy_buffer(&program.upload, &program.data.ibuf, 0, 0, program.upload.len()).unwrap();
+        self.encoder.copy_buffer(&program.upload.0, &program.data.ibuf, program.upload.1, 0, blur_commands.len()).unwrap();
         self.encoder.draw(&program.slice, &program.pso, &program.data);
     }
 }

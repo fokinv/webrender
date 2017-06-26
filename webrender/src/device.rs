@@ -38,7 +38,7 @@ use gfx_device_gl as device_gl;
 use gfx_device_gl::{Resources as R, CommandBuffer as CB};
 use gfx::CombinedError;
 use gfx::format::{Formatted, R8, Rgba8, Rgba32F, Srgba8, SurfaceTyped, TextureChannel, TextureSurface, Unorm};
-use gfx::format::{R8_G8_B8_A8, R32_G32_B32_A32, Srgb};
+use gfx::format::{R8_G8_B8_A8, R32_G32_B32_A32};
 use glutin;
 use pipelines::{primitive, ClipProgram, Position, PrimitiveInstances, Program};
 use prim_store::GRADIENT_DATA_SIZE;
@@ -61,7 +61,7 @@ pub const LAYER_TEXTURE_WIDTH: usize = 1017;
 pub const RENDER_TASK_TEXTURE_WIDTH: usize = 1023;
 pub const TEXTURE_HEIGTH: usize = 8;
 pub const DEVICE_PIXEL_RATIO: f32 = 1.0;
-pub const MAX_INSTANCE_COUNT: usize = 2000;
+pub const MAX_INSTANCE_COUNT: usize = 5000;
 
 pub const A_STRIDE: usize = 1;
 pub const RG_STRIDE: usize = 2;
@@ -544,7 +544,7 @@ impl Device {
             }
         };
         println!("bind_texture {:?} {:?} {:?} {:?}", texture_id, sampler, texture.stride, texture.data.len());
-        println!("texture.data={:?}", &texture.data[0..64]);
+        //println!("texture.data={:?}", &texture.data[0..64]);
         match sampler {
             TextureSampler::Color0 => Device::update_texture_surface(&mut self.encoder, &self.color0, texture.data.as_slice(), RGBA_STRIDE),
             TextureSampler::Color1 => Device::update_texture_surface(&mut self.encoder, &self.color1, texture.data.as_slice(), RGBA_STRIDE),
@@ -599,23 +599,6 @@ impl Device {
         match sampler {
             TextureSampler::Layers => Device::update_texture_surface(&mut self.encoder, &self.layers, data, RGBA_STRIDE),
             TextureSampler::RenderTasks => Device::update_texture_surface(&mut self.encoder, &self.render_tasks, data, RGBA_STRIDE),
-            //TextureSampler::ResourceCache => Device::update_texture_surface(&mut self.encoder, &self.resource_cache, data, RGBA_STRIDE),
-            //TextureSampler::Geometry => Device::update_texture_surface(&mut self.encoder, &self.prim_geo, data, RGBA_STRIDE),
-            //TextureSampler::SplitGeometry => Device::update_texture_surface(&mut self.encoder, &self.split_geo, data, RGBA_STRIDE),
-            //TextureSampler::Data16 => Device::update_texture_surface(&mut self.encoder, &self.data16, data, RGBA_STRIDE),
-            //TextureSampler::Data32 => Device::update_texture_surface(&mut self.encoder, &self.data32, data, RGBA_STRIDE),
-            //TextureSampler::Data64 => Device::update_texture_surface(&mut self.encoder, &self.data64, data, RGBA_STRIDE),
-            //TextureSampler::Data128 => Device::update_texture_surface(&mut self.encoder, &self.data128, data, RGBA_STRIDE),
-            //TextureSampler::ResourceRects => Device::update_texture_surface(&mut self.encoder, &self.resource_rects, data, RGBA_STRIDE),
-            _ => println!("{:?} sampler is not supported", sampler),
-        }
-    }
-
-    pub fn update_sampler_u8(&mut self,
-                             sampler: TextureSampler,
-                             data: &[u8]) {
-        match sampler {
-            //TextureSampler::Gradients => Device::update_texture_surface(&mut self.encoder, &self.gradient_data, data, RGBA_STRIDE),
             _ => println!("{:?} sampler is not supported", sampler),
         }
     }
@@ -684,9 +667,9 @@ impl Device {
         program.data.transform = proj.to_row_arrays();
 
         {
-            let mut writer = self.factory.write_mapping(&program.upload).unwrap();
+            let mut writer = self.factory.write_mapping(&program.upload.0).unwrap();
             for (i, inst) in instances.iter().enumerate() {
-                writer[i].update(inst);
+                writer[i + program.upload.1].update(inst);
             }
         }
 
@@ -698,17 +681,17 @@ impl Device {
             program.data.blend_value = [color.r, color.g, color.b, color.a];
         }
 
-        self.encoder.copy_buffer(&program.upload, &program.data.ibuf, 0, 0, program.upload.len()).unwrap();
+        self.encoder.copy_buffer(&program.upload.0, &program.data.ibuf, program.upload.1, 0, instances.len()).unwrap();
         self.encoder.draw(&program.slice, &program.get_pso(blendmode, enable_depth_write), &program.data);
-        //self.encoder.flush(&mut self.device);
+        program.upload.1 += instances.len();
     }
 
     pub fn draw_clip(&mut self,
                      program: &mut ClipProgram,
                      proj: &Transform3D<f32>,
                      instances: &[CacheClipInstance],
-                     blendmode: &BlendMode/*,
-                     texture_id: TextureId*/) {
+                     blendmode: &BlendMode,
+                     texture_id: TextureId) {
         program.data.transform = proj.to_row_arrays();
         let (w, h) = self.color0.get_size();
 
@@ -724,9 +707,9 @@ impl Device {
         //program.data.out_color = self.rtv.raw().clone();
         //program.data.out_depth = self.dsv.clone();
         {
-            let mut writer = self.factory.write_mapping(&program.upload).unwrap();
+            let mut writer = self.factory.write_mapping(&program.upload.0).unwrap();
             for (i, inst) in instances.iter().enumerate() {
-                writer[i].update(inst);
+                writer[i + program.upload.1].update(inst);
             }
         }
 
@@ -734,11 +717,12 @@ impl Device {
             program.slice.instances = Some((instances.len() as u32, 0));
         }
 
-        self.encoder.flush(&mut self.device);
-        self.encoder.copy_buffer(&program.upload, &program.data.ibuf, 0, 0, program.upload.len()).unwrap();
-        self.encoder.flush(&mut self.device);
+        //self.encoder.flush(&mut self.device);
+        self.encoder.copy_buffer(&program.upload.0, &program.data.ibuf, program.upload.1, 0, instances.len()).unwrap();
+        //self.encoder.flush(&mut self.device);
         self.encoder.draw(&program.slice, &program.get_pso(blendmode), &program.data);
-        self.encoder.flush(&mut self.device);
+        program.upload.1 += instances.len();
+        //self.encoder.flush(&mut self.device);
 
         /*{
             let mut output = vec![255u8; w as usize * h as usize * RGBA_STRIDE];
