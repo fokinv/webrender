@@ -175,11 +175,11 @@ uniform HIGHP_SAMPLER_FLOAT sampler2D sRenderTasks;
 // Instanced attributes
 //in ivec4 aData0;
 //in ivec4 aData1;
-struct VsInputPrim {
+/*struct VsInputPrim {
     vec3 aPosition;
     ivec4 aData0;
     ivec4 aData1;
-};
+};*/
 
 // get_fetch_uv is a macro to work around a macOS Intel driver parsing bug.
 // TODO: convert back to a function once the driver issues are resolved, if ever.
@@ -507,7 +507,7 @@ struct PrimitiveInstance {
     int user_data2;
 };
 
-PrimitiveInstance fetch_prim_instance() {
+PrimitiveInstance fetch_prim_instance(ivec4 aData0, ivec4 aData1) {
     PrimitiveInstance pi;
 
     pi.prim_address = aData0.x;
@@ -532,7 +532,7 @@ struct CompositeInstance {
     float z;
 };
 
-CompositeInstance fetch_composite_instance() {
+CompositeInstance fetch_composite_instance(ivec4 aData0, ivec4 aData1) {
     CompositeInstance ci;
 
     ci.render_task_index = aData0.x;
@@ -559,8 +559,8 @@ struct Primitive {
     float z;
 };
 
-Primitive load_primitive() {
-    PrimitiveInstance pi = fetch_prim_instance();
+Primitive load_primitive(ivec4 aData0, ivec4 aData1) {
+    PrimitiveInstance pi = fetch_prim_instance(aData0, aData1);
 
     Primitive prim;
 
@@ -616,17 +616,30 @@ vec4 untransform(vec2 ref, vec3 n, vec3 a, mat4 inv_transform) {
     ray_plane(n, a, p, d, t);
     float z = p.z + d.z * t; // Z of the visible point on the layer
 
+#ifdef WR_DX11
+    vec4 r = mul(inv_transform, vec4(ref, z, 1.0));
+#else
     vec4 r = inv_transform * vec4(ref, z, 1.0);
+#endif
     return r;
 }
 
 // Given a CSS space position, transform it back into the layer space.
 vec4 get_layer_pos(vec2 pos, Layer layer) {
     // get a point on the layer plane
+#ifdef WR_DX11
+    vec4 ah = mul(layer.transform, vec4(0.0, 0.0, 0.0, 1.0));
+#else
     vec4 ah = layer.transform * vec4(0.0, 0.0, 0.0, 1.0);
+#endif
+
     vec3 a = ah.xyz / ah.w;
     // get the normal to the layer plane
+#ifdef WR_DX11
+    vec3 n = mul(transpose(mat3(layer.inv_transform[0].xyz,layer.inv_transform[1].xyz,layer.inv_transform[2].xyz)), vec3(0.0, 0.0, 1.0));
+#else
     vec3 n = transpose(mat3(layer.inv_transform)) * vec3(0.0, 0.0, 1.0);
+#endif
     return untransform(pos, n, a, layer.inv_transform);
 }
 
@@ -642,11 +655,17 @@ vec2 compute_snap_offset(vec2 local_pos,
     //           is a layer transform with scale present? But it does fix
     //           the test cases we have in Servo that are failing without it
     //           and seem better than not having this at all.
-    snap_rect.size = max(snap_rect.size, vec2(1.0 / uDevicePixelRatio));
+    snap_rect.size = max(snap_rect.size, vec2(1.0 / uDevicePixelRatio, 1.0 / uDevicePixelRatio));
 
     // Transform the snap corners to the world space.
-    vec4 world_snap_p0 = layer.transform * vec4(snap_rect.p0, 0.0, 1.0);
-    vec4 world_snap_p1 = layer.transform * vec4(snap_rect.p0 + snap_rect.size, 0.0, 1.0);
+#ifdef WR_DX11
+  vec4 world_snap_p0 = mul(layer.transform, vec4(snap_rect.p0, 0.0, 1.0));
+  vec4 world_snap_p1 = mul(layer.transform, vec4(snap_rect.p0 + snap_rect.size, 0.0, 1.0));
+#else
+  vec4 world_snap_p0 = layer.transform * vec4(snap_rect.p0, 0.0, 1.0);
+  vec4 world_snap_p1 = layer.transform * vec4(snap_rect.p0 + snap_rect.size, 0.0, 1.0);
+#endif
+
     // Snap bounds in world coordinates, adjusted for pixel ratio. XY = top left, ZW = bottom right
     vec4 world_snap = uDevicePixelRatio * vec4(world_snap_p0.xy, world_snap_p1.xy) /
                                           vec4(world_snap_p0.ww, world_snap_p1.ww);
@@ -664,7 +683,8 @@ struct VertexInfo {
     vec2 screen_pos;
 };
 
-VertexInfo write_vertex(RectWithSize instance_rect,
+VertexInfo write_vertex(vec3 aPosition,
+                        RectWithSize instance_rect,
                         RectWithSize local_clip_rect,
                         float z,
                         Layer layer,
@@ -682,8 +702,12 @@ VertexInfo write_vertex(RectWithSize instance_rect,
     vec2 snap_offset = compute_snap_offset(clamped_local_pos, local_clip_rect, layer, snap_rect);
 
     // Transform the current vertex to the world cpace.
-    vec4 world_pos = layer.transform * vec4(clamped_local_pos, 0.0, 1.0);
 
+#ifdef WR_DX11
+    vec4 world_pos = mul(layer.transform, vec4(clamped_local_pos, 0.0, 1.0));
+#else
+    vec4 world_pos = layer.transform * vec4(clamped_local_pos, 0.0, 1.0);
+#endif
     // Convert the world positions to device pixel space.
     vec2 device_pos = world_pos.xy / world_pos.w * uDevicePixelRatio;
 
@@ -760,9 +784,15 @@ TransformVertexInfo write_transform_vertex(RectWithSize instance_rect,
     }
 
     // Transform them to world space
+#ifdef WR_DX11
+    vec4 current_world_pos = mul(layer.transform, vec4(current_local_pos, 0.0, 1.0));
+    vec4 prev_world_pos = mul(layer.transform, vec4(prev_local_pos, 0.0, 1.0));
+    vec4 next_world_pos = mul(layer.transform, vec4(next_local_pos, 0.0, 1.0));
+#else
     vec4 current_world_pos = layer.transform * vec4(current_local_pos, 0.0, 1.0);
     vec4 prev_world_pos = layer.transform * vec4(prev_local_pos, 0.0, 1.0);
     vec4 next_world_pos = layer.transform * vec4(next_local_pos, 0.0, 1.0);
+#endif
 
     // Convert to device space
     vec2 current_device_pos = uDevicePixelRatio * current_world_pos.xy / current_world_pos.w;
