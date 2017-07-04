@@ -11,7 +11,10 @@ use gfx::memory::Typed;
 use gfx::Factory;
 use gfx::traits::FactoryExt;
 use gfx::format::DepthStencil as DepthFormat;
+#[cfg(not(target_os = "windows"))]
 use gfx_device_gl::Resources as R;
+#[cfg(target_os = "windows")]
+use gfx_device_dx11::{Resources as R, CommandBuffer as CB};
 use gfx::format::Format;
 use tiling::{BlurCommand, CacheClipInstance, PrimitiveInstance};
 use renderer::BlendMode;

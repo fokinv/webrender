@@ -47,8 +47,17 @@ extern crate thread_profiler;
 extern crate rand;
 #[macro_use]
 extern crate gfx;
+#[cfg(target_os = "windows")]
+extern crate gfx_device_dx11;
+#[cfg(target_os = "windows")]
+extern crate gfx_window_dxgi;
+#[cfg(target_os = "windows")]
+extern crate winit;
+
+#[cfg(not(target_os = "windows"))]
 extern crate gfx_device_gl;
-extern crate glutin;
+//#[cfg(not(target_os = "windows"))]
+//extern crate glutin;
 
 mod border;
 mod clip_scroll_node;

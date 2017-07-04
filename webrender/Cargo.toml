@@ -32,9 +32,15 @@ gamma-lut = "0.2"
 thread_profiler = "0.1.1"
 plane-split = "0.6"
 rand = "0.3"
-gfx = { git = 'https://github.com/gfx-rs/gfx' }
-gfx_device_gl = { git = 'https://github.com/gfx-rs/gfx' }
-servo-glutin = "0.11"
+#gfx = { git = 'https://github.com/gfx-rs/gfx' }
+#gfx_device_gl = { git = 'https://github.com/gfx-rs/gfx' }
+#gfx_device_dx11 = { git = 'https://github.com/gfx-rs/gfx' }
+#gfx_window_dxgi = { git = 'https://github.com/gfx-rs/gfx' }
+gfx = { path = '../../gfx/src/render' }
+gfx_device_dx11 = { path = '../../gfx/src/backend/dx11' }
+gfx_window_dxgi = { path = '../../gfx/src/window/dxgi' }
+
+#servo-glutin = "0.11"
 
 [dev-dependencies]
 angle = {git = "https://github.com/servo/angle", branch = "servo"}
@@ -46,6 +52,7 @@ freetype = { version = "0.2", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 dwrote = "0.4"
+winit = "0.6.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.8.0"

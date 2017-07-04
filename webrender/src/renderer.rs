@@ -60,7 +60,10 @@ use webrender_traits::VRCompositorHandler;
 use webrender_traits::{YuvColorSpace, YuvFormat};
 use webrender_traits::{YUV_COLOR_SPACES, YUV_FORMATS};
 
-use glutin;
+#[cfg(target_os = "windows")]
+use winit;
+#[cfg(target_os = "windows")]
+use gfx_window_dxgi as window;
 use gfx;
 use gfx::memory::Pod;
 
@@ -439,15 +442,15 @@ pub struct Renderer {
     // These are "cache shaders". These shaders are used to
     // draw intermediate results to cache targets. The results
     // of these shaders are then used by the primitive shaders.
-    cs_box_shadow: CacheProgram,
-    cs_text_run: CacheProgram,
-    cs_blur: BlurProgram,
+    //cs_box_shadow: CacheProgram,
+    //cs_text_run: CacheProgram,
+    //cs_blur: BlurProgram,
     /// These are "cache clip shaders". These shaders are used to
     /// draw clip instances into the cached clip mask. The results
     /// of these shaders are also used by the primitive shaders.
-    cs_clip_rectangle: ClipProgram,
-    cs_clip_image: ClipProgram,
-    cs_clip_border: ClipProgram,
+    //cs_clip_rectangle: ClipProgram,
+    //cs_clip_image: ClipProgram,
+    //cs_clip_border: ClipProgram,
 
     // The are "primitive shaders". These shaders draw and blend
     // final results on screen. They are aware of tile boundaries.
@@ -587,9 +590,9 @@ impl Renderer {
     /// let (renderer, sender) = Renderer::new(opts);
     /// ```
     /// [rendereroptions]: struct.RendererOptions.html
-    pub fn new(window: &glutin::Window,
+    pub fn new(window: winit::Window,
                mut options: RendererOptions,
-               initial_window_size: DeviceUintSize) -> Result<(Renderer, RenderApiSender), InitError> {
+               initial_window_size: DeviceUintSize) -> Result<(window::Window, Renderer, RenderApiSender), InitError> {
         let (api_tx, api_rx) = try!{ channel::msg_channel() };
         let (payload_tx, payload_rx) = try!{ channel::payload_channel() };
         let (result_tx, result_rx) = channel();
@@ -599,10 +602,10 @@ impl Renderer {
         let notifier = Arc::new(Mutex::new(None));
 
 
-        let mut device = Device::new(window);
+        let (mut win, mut device) = Device::new(window);
         // device-pixel ratio doesn't matter here - we are just creating resources.
 
-        let cs_box_shadow = device.create_cache_program(include_bytes!(concat!(env!("OUT_DIR"), "/cs_box_shadow.vert")),
+        /*let cs_box_shadow = device.create_cache_program(include_bytes!(concat!(env!("OUT_DIR"), "/cs_box_shadow.vert")),
                                                         include_bytes!(concat!(env!("OUT_DIR"), "/cs_box_shadow.frag")));
         let cs_text_run = device.create_cache_program(include_bytes!(concat!(env!("OUT_DIR"), "/cs_text_run.vert")),
                                                       include_bytes!(concat!(env!("OUT_DIR"), "/cs_text_run.frag")));
@@ -614,7 +617,7 @@ impl Renderer {
                                                        include_bytes!(concat!(env!("OUT_DIR"), "/cs_clip_image.frag")));
         let cs_clip_border = device.create_clip_program(include_bytes!(concat!(env!("OUT_DIR"), "/cs_clip_border.vert")),
                                                         include_bytes!(concat!(env!("OUT_DIR"), "/cs_clip_border.frag")));
-
+        */
         let ps_rectangle = create_programs!(device, "ps_rectangle");
         let ps_rectangle_clip = create_programs!(device, "ps_rectangle_clip");
         let ps_text_run = create_programs!(device, "ps_text_run");
@@ -739,12 +742,12 @@ impl Renderer {
             pending_texture_updates: Vec::new(),
             pending_gpu_cache_updates: Vec::new(),
             pending_shader_updates: Vec::new(),
-            cs_box_shadow: cs_box_shadow,
-            cs_text_run: cs_text_run,
-            cs_blur: cs_blur,
-            cs_clip_rectangle: cs_clip_rectangle,
-            cs_clip_border: cs_clip_border,
-            cs_clip_image: cs_clip_image,
+            //cs_box_shadow: cs_box_shadow,
+            //cs_text_run: cs_text_run,
+            //cs_blur: cs_blur,
+            //cs_clip_rectangle: cs_clip_rectangle,
+            //cs_clip_border: cs_clip_border,
+            //cs_clip_image: cs_clip_image,
             ps_rectangle: ProgramPair(ps_rectangle),
             ps_rectangle_clip: ProgramPair(ps_rectangle_clip),
             ps_text_run: ProgramPair(ps_text_run),
@@ -794,7 +797,7 @@ impl Renderer {
         };
 
         let sender = RenderApiSender::new(api_tx, payload_tx);
-        Ok((renderer, sender))
+        Ok((win, renderer, sender))
     }
 
     /*pub fn get_graphics_api_info(&self) -> GraphicsApiInfo {
@@ -1013,12 +1016,12 @@ impl Renderer {
 
     fn flush(&mut self) {
         self.device.flush();
-        self.cs_box_shadow.reset_upload_offset();
-        self.cs_text_run.reset_upload_offset();
-        self.cs_blur.reset_upload_offset();
-        self.cs_clip_rectangle.reset_upload_offset();
-        self.cs_clip_image.reset_upload_offset();
-        self.cs_clip_border.reset_upload_offset();
+        //self.cs_box_shadow.reset_upload_offset();
+        //self.cs_text_run.reset_upload_offset();
+        //self.cs_blur.reset_upload_offset();
+        //self.cs_clip_rectangle.reset_upload_offset();
+        //self.cs_clip_image.reset_upload_offset();
+        //self.cs_clip_border.reset_upload_offset();
         self.ps_rectangle.reset_upload_offset();
         self.ps_rectangle_clip.reset_upload_offset();
         self.ps_text_run.reset_upload_offset();
@@ -1399,16 +1402,16 @@ impl Renderer {
         //           blur radii with fixed weights.
         if !target.vertical_blurs.is_empty() || !target.horizontal_blurs.is_empty() {
             println!("cs_blur");
-            {
+            /*{
                 self.device.draw_blur(&mut self.cs_blur, projection, &target.vertical_blurs);
             }
-            self.device.draw_blur(&mut self.cs_blur, projection, &target.horizontal_blurs);
+            self.device.draw_blur(&mut self.cs_blur, projection, &target.horizontal_blurs);*/
         }
 
         // Draw any box-shadow caches for this target.
         if !target.box_shadow_cache_prims.is_empty() {
             println!("cs_box_shadow");
-            self.device.draw_cache(&mut self.cs_box_shadow, projection, &target.box_shadow_cache_prims, &BlendMode::None);
+            //self.device.draw_cache(&mut self.cs_box_shadow, projection, &target.box_shadow_cache_prims, &BlendMode::None);
         }
 
         // Draw any textrun caches for this target. For now, this
@@ -1419,8 +1422,7 @@ impl Renderer {
         // to multiple tiles in the normal text run case.
         if !target.text_run_cache_prims.is_empty() {
             println!("cs_text_run");
-            self.device.draw_cache(&mut self.cs_text_run, projection, &target.text_run_cache_prims, &BlendMode::Alpha);
-
+            //self.device.draw_cache(&mut self.cs_text_run, projection, &target.text_run_cache_prims, &BlendMode::Alpha);
         }
 
         let mut enable_depth_write = true;
@@ -1487,13 +1489,13 @@ impl Renderer {
             // in regions below.
             if !target.clip_batcher.border_clears.is_empty() {
                 println!("cs_clip_border, border_clears");
-                self.device.draw_clip(&mut self.cs_clip_border, projection, &target.clip_batcher.border_clears, &BlendMode::None, render_target.0);
+                //self.device.draw_clip(&mut self.cs_clip_border, projection, &target.clip_batcher.border_clears, &BlendMode::None, render_target.0);
             }
 
             // Draw any dots or dashes for border corners.
             if !target.clip_batcher.borders.is_empty() {
                 println!("cs_clip_border, borders");
-                self.device.draw_clip(&mut self.cs_clip_border, projection, &target.clip_batcher.borders, &BlendMode::Max, render_target.0);
+                //self.device.draw_clip(&mut self.cs_clip_border, projection, &target.clip_batcher.borders, &BlendMode::Max, render_target.0);
             }
 
             // switch to multiplicative blending
@@ -1502,19 +1504,19 @@ impl Renderer {
             // draw rounded cornered rectangles
             if !target.clip_batcher.rectangles.is_empty() {
                 println!("cs_clip_rectangle");
-                self.device.draw_clip(&mut self.cs_clip_rectangle,
+                /*self.device.draw_clip(&mut self.cs_clip_rectangle,
                                       projection,
                                       &target.clip_batcher.rectangles,
                                       &blend_mode,
-                                      render_target.0);
+                                      render_target.0);*/
             }
             // draw image masks
             for (mask_texture_id, items) in target.clip_batcher.images.iter() {
-                let texture_id = self.resolve_source_texture(&mask_texture_id);
-                self.device.bind_texture(TextureSampler::Color0, texture_id);
+                //let texture_id = self.resolve_source_texture(&mask_texture_id);
+                //self.device.bind_texture(TextureSampler::Color0, texture_id);
 
                 println!("cs_clip_image");
-                self.device.draw_clip(&mut self.cs_clip_image, projection, &items, &blend_mode, render_target.0);
+                //self.device.draw_clip(&mut self.cs_clip_image, projection, &items, &blend_mode, render_target.0);
             }
         }
     }

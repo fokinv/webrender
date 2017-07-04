@@ -34,12 +34,26 @@ use gfx::Factory;
 use gfx::texture::Kind;
 use gfx::traits::FactoryExt;
 use gfx::format::{DepthStencil as DepthFormat, Rgba8 as ColorFormat};
-use gfx_device_gl as device_gl;
-use gfx_device_gl::{Resources as R, CommandBuffer as CB};
+
+#[cfg(not(target_os = "windows"))]
+use gfx_device_gl as backend;
+#[cfg(target_os = "windows")]
+use gfx_device_dx11 as backend;
+
+use self::backend::Resources as R;
+#[cfg(not(target_os = "windows"))]
+pub type CB = self::backend::CommandBuffer;
+#[cfg(target_os = "windows")]
+pub type CB = self::backend::CommandBuffer<backend::DeferredContext>;
+//pub type CB = self::backend::CommandBuffer<backend::CommandList>;
+
+use winit;
+#[cfg(target_os = "windows")]
+use gfx_window_dxgi as window;
+
 use gfx::CombinedError;
 use gfx::format::{Formatted, R8, Rgba8, Rgba32F, Srgba8, SurfaceTyped, TextureChannel, TextureSurface, Unorm};
 use gfx::format::{R8_G8_B8_A8, R32_G32_B32_A32};
-use glutin;
 use pipelines::{primitive, ClipProgram, Position, PrimitiveInstances, Program};
 use prim_store::GRADIENT_DATA_SIZE;
 use tiling::{CacheClipInstance, PrimitiveInstance};
@@ -242,8 +256,8 @@ pub enum ShaderError {
 }
 
 pub struct Device {
-    pub device: device_gl::Device,
-    pub factory: device_gl::Factory,
+    pub device: backend::Deferred,
+    pub factory: backend::Factory,
     pub encoder: gfx::Encoder<R,CB>,
     pub textures: HashMap<TextureId, TextureData>,
     pub color0: Texture<R, Srgba8>,
@@ -260,18 +274,19 @@ pub struct Device {
     pub main_depth: gfx::handle::DepthStencilView<R, DepthFormat>,
     pub vertex_buffer: gfx::handle::Buffer<R, Position>,
     pub slice: gfx::Slice<R>,
-    pub rtv: gfx::handle::RenderTargetView<R, ColorFormat>,
-    pub dsv: gfx::handle::DepthStencilView<R, DepthFormat>,
+    //pub rtv: gfx::handle::RenderTargetView<R, ColorFormat>,
+    //pub dsv: gfx::handle::DepthStencilView<R, DepthFormat>,
 }
 
 impl Device {
-    pub fn new(window: &glutin::Window) -> Device {
-        let (device, mut factory, main_color, main_depth) = init_existing::<ColorFormat, DepthFormat>(window);
+    pub fn new(window: winit::Window) -> (window::Window, Device) {
+        //let (mut win, device, mut factory, main_color, main_depth) = init_existing::<ColorFormat, DepthFormat>(window);
+        let (mut win, device, mut factory, main_color, main_depth) = init_existing(window);
         /*println!("Vendor: {:?}", device.get_info().platform_name.vendor);
         println!("Renderer: {:?}", device.get_info().platform_name.renderer);
         println!("Version: {:?}", device.get_info().version);
         println!("Shading Language: {:?}", device.get_info().shading_language);*/
-        let encoder = factory.create_command_buffer().into();
+        let encoder = factory.create_command_buffer_native().into();
         let max_texture_size = MAX_VERTEX_TEXTURE_WIDTH as u32;
 
         let (x0, y0, x1, y1) = (0.0, 0.0, 1.0, 1.0);
@@ -323,9 +338,9 @@ impl Device {
         ];
         textures.insert(dither_id, TextureData { id: dither_id, data: dither_matrix, stride: A_STRIDE, pitch: 8 * RGBA_STRIDE });
 
-        let (rtv, dsv) = create_main_targets::<ColorFormat, DepthFormat>(&mut factory, w as u16, h as u16).unwrap();
+        //let (rtv, dsv) = create_main_targets::<ColorFormat, DepthFormat>(&mut factory, w as u16, h as u16).unwrap();
 
-        Device {
+        let dev = Device {
             device: device,
             factory: factory,
             encoder: encoder,
@@ -344,9 +359,10 @@ impl Device {
             main_depth: main_depth,
             vertex_buffer: vertex_buffer,
             slice: slice,
-            rtv: rtv,
-            dsv: dsv,
-        }
+            //rtv: rtv,
+            //dsv: dsv,
+        };
+        (win, dev)
     }
 
     pub fn read_pixels(&mut self, rect: DeviceUintRect, output: &mut [u8]) {
@@ -837,9 +853,9 @@ impl Device {
     }
 }
 
-fn create_main_targets<T: gfx::format::RenderFormat + gfx::format::TextureFormat,
+/*fn create_main_targets<T: gfx::format::RenderFormat + gfx::format::TextureFormat,
                        S: gfx::format::DepthFormat + gfx::format::TextureFormat>
-                       (factory: &mut device_gl::Factory, width: gfx::texture::Size, height: gfx::texture::Size)
+                       (factory: &mut backend::Factory, width: gfx::texture::Size, height: gfx::texture::Size)
                         -> Result<(gfx::handle::RenderTargetView<R, T>,
                                    gfx::handle::DepthStencilView<R, S>), gfx::CombinedError>
 {
@@ -853,15 +869,16 @@ fn create_main_targets<T: gfx::format::RenderFormat + gfx::format::TextureFormat
     let tex_dsv = try!(factory.create_texture(kind, 1, gfx::memory::DEPTH_STENCIL, gfx::memory::Usage::Data, Some(dsv_cty)));
     let dsv = try!(factory.view_texture_as_depth_stencil_trivial(&tex_dsv));
     Ok((rtv, dsv))
-}
+}*/
 
+#[cfg(not(target_os = "windows"))]
 pub fn init_existing<Cf, Df>(window: &glutin::Window) ->
-                            (device_gl::Device,device_gl::Factory,
+                            (backend::Device,backend::Factory,
                              gfx::handle::RenderTargetView<R, Cf>, gfx::handle::DepthStencilView<R, Df>)
 where Cf: gfx::format::RenderFormat, Df: gfx::format::DepthFormat,
 {
     unsafe { window.make_current().unwrap() };
-    let (device, factory) = device_gl::create(|s|
+    let (device, factory) = backend::create(|s|
         window.get_proc_address(s) as *const std::os::raw::c_void);
 
     let (width, height) = window.get_inner_size().unwrap();
@@ -871,6 +888,24 @@ where Cf: gfx::format::RenderFormat, Df: gfx::format::DepthFormat,
                1,
                aa.into());
 
-    let (color_view, ds_view) = device_gl::create_main_targets_raw(dim, Cf::get_format().0, Df::get_format().0);
+    let (color_view, ds_view) = backend::create_main_targets_raw(dim, Cf::get_format().0, Df::get_format().0);
     (device, factory, Typed::new(color_view), Typed::new(ds_view))
+}
+
+#[cfg(target_os = "windows")]
+/*pub fn init_existing<Cf, Df>(window: winit::Window) ->
+                            (window::Window, backend::Device, backend::Factory,
+                             gfx::handle::RenderTargetView<R, Cf>, gfx::handle::DepthStencilView<R, Df>)
+where Cf: gfx::format::RenderFormat, Df: gfx::format::DepthFormat,*/
+pub fn init_existing(window: winit::Window) ->
+                    (window::Window, backend::Deferred, backend::Factory,
+                     gfx::handle::RenderTargetView<R, ColorFormat>, gfx::handle::DepthStencilView<R, DepthFormat>)
+{
+    println!("TODO d11 window");
+    //unimplemented!();
+    let (mut win, device, mut factory, main_color) = window::init_existing_raw(window, ColorFormat::get_format()).unwrap();
+    //let main_depth = factory.create_depth_stencil_view_only(win.size.0, win.size.1).unwrap();
+    let main_depth = factory.create_depth_stencil_view_only(win.size.0, win.size.1).unwrap();
+    let mut device = backend::Deferred::from(device);
+    (win, device, factory, gfx::memory::Typed::new(main_color), main_depth)
 }

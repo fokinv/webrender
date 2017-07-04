@@ -8,11 +8,14 @@ use std::path::{Path, PathBuf};
 use std::io::prelude::*;
 use std::fs::{canonicalize, read_dir, File};
 
-#[cfg(not(any(target_arch = "arm", target_arch = "aarch64")))]
+#[cfg(not(any(target_arch = "arm", target_arch = "aarch64", target_os = "windows")))]
 const SHADER_VERSION: &'static str = "#version 150\n";
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 const SHADER_VERSION: &'static str = "#version 300 es\n";
+
+#[cfg(any(target_os = "windows"))]
+const SHADER_VERSION: &'static str = "";
 
 fn write_shaders(glsl_files: Vec<PathBuf>, shader_file_path: &Path) {
     let mut shader_file = File::create(shader_file_path).unwrap();
@@ -95,6 +98,10 @@ fn create_shaders(glsl_files: Vec<PathBuf>, out_dir: String) {
         let mut shader_prefix =
             format!("{}\n// Base shader: {}\n#define WR_MAX_VERTEX_TEXTURE_WIDTH {}\n",
                     SHADER_VERSION, base_filename, 1024);
+
+        if cfg!(target_os = "windows") {
+            shader_prefix.push_str("#define WR_DX11\n");
+        }
 
         if is_vert {
             shader_prefix.push_str("#define WR_VERTEX_SHADER\n");
