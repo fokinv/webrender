@@ -72,6 +72,7 @@ pub const DUMMY_RGBA8_ID: u32 = 2;
 pub const DUMMY_A8_ID: u32 = 3;
 pub const DITHER_ID: u32 = 4;
 
+#[cfg(not(target_os = "windows"))]
 macro_rules! create_program (
     ($device: ident, $shader: expr) => {
         $device.create_program(include_bytes!(concat!(env!("OUT_DIR"), "/", $shader, ".vert")),
@@ -79,9 +80,18 @@ macro_rules! create_program (
     };
 );
 
+#[cfg(target_os = "windows")]
+macro_rules! create_program (
+    ($device: ident, $shader: expr) => {
+        $device.create_program(include_bytes!(concat!(env!("OUT_DIR"), "/", $shader, ".vert.fx")),
+                               include_bytes!(concat!(env!("OUT_DIR"), "/", $shader, ".frag.fx")))
+    };
+);
+
 macro_rules! create_programs (
     ($device: ident, $shader: expr) => {
-        (create_program!($device, $shader), create_program!($device, concat!($shader, "_transform")))
+        //(create_program!($device, $shader), create_program!($device, concat!($shader, "_transform")))
+        (create_program!($device, $shader), create_program!($device, $shader))
     };
 );
 
@@ -460,7 +470,7 @@ pub struct Renderer {
     // output, and the cache_image shader blits the results of
     // a cache shader (e.g. blur) to the screen.
     ps_rectangle: ProgramPair,
-    ps_rectangle_clip: ProgramPair,
+    /*ps_rectangle_clip: ProgramPair,
     ps_text_run: ProgramPair,
     ps_text_run_subpixel: ProgramPair,
     ps_image: ProgramPair,
@@ -476,7 +486,7 @@ pub struct Renderer {
     ps_blend: Program,
     ps_hw_composite: Program,
     ps_split_composite: Program,
-    ps_composite: Program,
+    ps_composite: Program,*/
 
     notifier: Arc<Mutex<Option<Box<RenderNotifier>>>>,
 
@@ -619,7 +629,7 @@ impl Renderer {
                                                         include_bytes!(concat!(env!("OUT_DIR"), "/cs_clip_border.frag")));
         */
         let ps_rectangle = create_programs!(device, "ps_rectangle");
-        let ps_rectangle_clip = create_programs!(device, "ps_rectangle_clip");
+        /*let ps_rectangle_clip = create_programs!(device, "ps_rectangle_clip");
         let ps_text_run = create_programs!(device, "ps_text_run");
         let ps_text_run_subpixel = create_programs!(device, "ps_text_run_subpixel");
         let ps_image = create_programs!(device, "ps_image");
@@ -651,7 +661,7 @@ impl Renderer {
         let ps_blend = create_program!(device, "ps_blend");
         let ps_hw_composite = create_program!(device, "ps_hardware_composite");
         let ps_split_composite = create_program!(device, "ps_split_composite");
-        let ps_composite = create_program!(device, "ps_composite");
+        let ps_composite = create_program!(device, "ps_composite");*/
 
         let device_max_size = device.max_texture_size();
         let max_texture_size = cmp::min(device_max_size, options.max_texture_size.unwrap_or(device_max_size));
@@ -749,7 +759,7 @@ impl Renderer {
             //cs_clip_border: cs_clip_border,
             //cs_clip_image: cs_clip_image,
             ps_rectangle: ProgramPair(ps_rectangle),
-            ps_rectangle_clip: ProgramPair(ps_rectangle_clip),
+            /*ps_rectangle_clip: ProgramPair(ps_rectangle_clip),
             ps_text_run: ProgramPair(ps_text_run),
             ps_text_run_subpixel: ProgramPair(ps_text_run_subpixel),
             ps_image: ProgramPair(ps_image),
@@ -764,7 +774,7 @@ impl Renderer {
             ps_blend: ps_blend,
             ps_hw_composite: ps_hw_composite,
             ps_split_composite: ps_split_composite,
-            ps_composite: ps_composite,
+            ps_composite: ps_composite,*/
             notifier: notifier,
             //debug: debug_renderer,
             render_target_debug: render_target_debug,
@@ -1023,7 +1033,7 @@ impl Renderer {
         //self.cs_clip_image.reset_upload_offset();
         //self.cs_clip_border.reset_upload_offset();
         self.ps_rectangle.reset_upload_offset();
-        self.ps_rectangle_clip.reset_upload_offset();
+        /*self.ps_rectangle_clip.reset_upload_offset();
         self.ps_text_run.reset_upload_offset();
         self.ps_text_run_subpixel.reset_upload_offset();
         self.ps_image.reset_upload_offset();
@@ -1040,7 +1050,7 @@ impl Renderer {
         self.ps_composite.reset_upload_offset();
         for mut program in &mut self.ps_yuv_image {
             program.reset_upload_offset();
-        }
+        }*/
     }
 
     pub fn layers_are_bouncing_back(&self) -> bool {
@@ -1261,13 +1271,13 @@ impl Renderer {
         {
             let mut program = match batch.key.kind {
                 AlphaBatchKind::Rectangle => {
-                    if needs_clipping {
-                        self.ps_rectangle_clip.get(transform_kind)
-                    } else {
+                    //if needs_clipping {
+                    //    self.ps_rectangle_clip.get(transform_kind)
+                    //} else {
                         self.ps_rectangle.get(transform_kind)
-                    }
+                    //}
                 },
-                AlphaBatchKind::Composite => &mut self.ps_composite,
+                /*AlphaBatchKind::Composite => &mut self.ps_composite,
                 AlphaBatchKind::SplitComposite => &mut self.ps_split_composite,
                 AlphaBatchKind::HardwareComposite => &mut self.ps_hw_composite,
                 AlphaBatchKind::Blend => &mut self.ps_blend,
@@ -1290,7 +1300,11 @@ impl Renderer {
                 AlphaBatchKind::AngleGradient => self.ps_angle_gradient.get(transform_kind),
                 AlphaBatchKind::RadialGradient => self.ps_radial_gradient.get(transform_kind),
                 AlphaBatchKind::BoxShadow => self.ps_box_shadow.get(transform_kind),
-                AlphaBatchKind::CacheImage => self.ps_cache_image.get(transform_kind),
+                AlphaBatchKind::CacheImage => self.ps_cache_image.get(transform_kind),*/
+                _ => {
+                    println!("TODO {:?}", batch.key.kind);
+                    return;
+                },
             };
 
             self.device.draw(&mut program, projection, &batch.instances, &batch.key.blend_mode, enable_depth_write);

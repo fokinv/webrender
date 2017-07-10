@@ -36,7 +36,7 @@ fn push_sub_clip(api: &RenderApi, builder: &mut DisplayListBuilder, bounds: &Lay
         LayoutRect::new(LayoutPoint::new(50.0, 50.0), LayoutSize::new(100.0, 100.0)),
         webrender_traits::BorderRadius::uniform(20.0));
 
-    builder.push_clip_region(bounds, vec![complex], None/*Some(mask)*/)
+    builder.push_clip_region(bounds, vec![/*complex*/], None/*Some(mask)*/)
 }
 
 
@@ -89,7 +89,7 @@ fn main() {
                       clip,
                       ColorF::new(0.0, 1.0, 0.0, 1.0));
 
-    let clip = push_sub_clip(&api, &mut builder, &bounds);
+    /*let clip = push_sub_clip(&api, &mut builder, &bounds);
     builder.push_rect(LayoutRect::new(LayoutPoint::new(250.0, 100.0), LayoutSize::new(100.0, 100.0)),
                       clip,
                       ColorF::new(0.0, 1.0, 0.0, 1.0));
@@ -115,7 +115,7 @@ fn main() {
     builder.push_border(LayoutRect::new(LayoutPoint::new(100.0, 100.0), LayoutSize::new(100.0, 100.0)),
                         clip,
                         border_widths,
-                        border_details);
+                        border_details);*/
 
     builder.pop_stacking_context();
 

@@ -20,12 +20,29 @@
     #define uniform
     #define sampler2D Texture2D
     #define sampler2DArray Texture2DArray
-    #define gl_Position SV_Position
-    #define gl_FragCoord SV_Position
+    //#define gl_Position SV_Position
+    //#define gl_FragCoord SV_Position
+    #define gl_InstanceID SV_InstanceID
+    #define gl_VertexID SV_VertexID
     #define point p
     #define flat
     #define texelFetchOffset(sampler, loc, index, offset) sampler.Load(vec3(loc, 0.0), offset)
     #define texelFetch(sampler, loc, index) sampler.Load(vec3(loc, 0.0))
+
+    vec2 textureSize(sampler2D s, int lod) {
+        uint width;
+        uint height;
+        s.GetDimensions(width, height);
+        return vec2(width, height);
+    }
+
+    vec2 textureSize(sampler2DArray s, int lod) {
+        uint width;
+        uint height;
+        uint elements;
+        s.GetDimensions(width, height, elements);
+        return vec2(width, height);
+    }
 #endif
 
 #ifdef WR_FEATURE_TEXTURE_EXTERNAL
@@ -51,28 +68,48 @@
 // Vertex shader attributes and uniforms
 //======================================================================================
 #ifdef WR_VERTEX_SHADER
-    //#define varying out
 
+#ifndef WR_DX11
+    #define varying out
     // Uniform inputs
     uniform mat4 uTransform;       // Orthographic projection
     uniform float uDevicePixelRatio;
+#else
+    cbuffer Locals {
+        mat4 uTransform;       // Orthographic projection
+        float uDevicePixelRatio;
+    }
+#endif
 
     // Attribute inputs
-    //in vec3 aPosition;
+#ifdef WR_DX11
+    // The hlsl input struct in prim and clip shaders
+#else
+    in vec3 aPosition;
+#endif
+
 #endif
 
 //======================================================================================
 // Fragment shader attributes and uniforms
 //======================================================================================
 #ifdef WR_FRAGMENT_SHADER
+
+#ifndef WR_DX11
     precision highp float;
-
-    //#define varying in
-
+    #define varying in
+#endif
     // Uniform inputs
 
     // Fragment shader outputs
-    //out vec4 oFragColor;
+#ifdef WR_DX11
+    struct p2f {
+        vec4 oFragColor : SV_Target;
+    };
+#else
+    out vec4 oFragColor;
+#endif
+
 #endif
 
 //======================================================================================

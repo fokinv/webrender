@@ -54,7 +54,7 @@ use gfx_window_dxgi as window;
 use gfx::CombinedError;
 use gfx::format::{Formatted, R8, Rgba8, Rgba32F, Srgba8, SurfaceTyped, TextureChannel, TextureSurface, Unorm};
 use gfx::format::{R8_G8_B8_A8, R32_G32_B32_A32};
-use pipelines::{primitive, ClipProgram, Position, PrimitiveInstances, Program};
+use pipelines::{primitive, ClipProgram, Position, PrimitiveInstances, Program, Locals};
 use prim_store::GRADIENT_DATA_SIZE;
 use tiling::{CacheClipInstance, PrimitiveInstance};
 use renderer::{BlendMode, DITHER_ID, DUMMY_A8_ID, DUMMY_RGBA8_ID, MAX_VERTEX_TEXTURE_WIDTH};
@@ -653,6 +653,7 @@ impl Device {
                                                    gfx::TRANSFER_DST).unwrap();
 
         let data = primitive::Data {
+            locals: self.factory.create_constant_buffer(1),
             transform: [[0f32; 4]; 4],
             device_pixel_ratio: DEVICE_PIXEL_RATIO,
             vbuf: self.vertex_buffer.clone(),
@@ -697,6 +698,11 @@ impl Device {
             program.data.blend_value = [color.r, color.g, color.b, color.a];
         }
 
+        let locals = Locals {
+            transform: program.data.transform,
+            device_pixel_ratio: program.data.device_pixel_ratio,
+        };
+        self.encoder.update_buffer(&program.data.locals, &[locals], 0).unwrap();
         self.encoder.copy_buffer(&program.upload.0, &program.data.ibuf, program.upload.1, 0, instances.len()).unwrap();
         self.encoder.draw(&program.slice, &program.get_pso(blendmode, enable_depth_write), &program.data);
         program.upload.1 += instances.len();

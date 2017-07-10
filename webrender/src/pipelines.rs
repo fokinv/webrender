@@ -90,8 +90,8 @@ gfx_defines! {
     }
 
     vertex PrimitiveInstances {
-            data0: [i32; 4] = "aData0",
-            data1: [i32; 4] = "aData1",
+            data0: [i32; 4] = "aDataA",
+            data1: [i32; 4] = "aDataB",
     }
 
     vertex BlurInstances {
@@ -108,7 +108,13 @@ gfx_defines! {
         resource_address: i32 = "aClipResourceAddress",
     }
 
+    constant Locals {
+        transform: [[f32; 4]; 4] = "uTransform",
+        device_pixel_ratio: f32 = "uDevicePixelRatio",
+    }
+
     pipeline primitive {
+        locals: gfx::ConstantBuffer<Locals> = "Locals",
         transform: gfx::Global<[[f32; 4]; 4]> = "uTransform",
         device_pixel_ratio: gfx::Global<f32> = "uDevicePixelRatio",
         vbuf: gfx::VertexBuffer<Position> = (),
@@ -125,7 +131,7 @@ gfx_defines! {
         render_tasks: gfx::TextureSampler<[f32; 4]> = "sRenderTasks",
         resource_cache: gfx::TextureSampler<[f32; 4]> = "sResourceCache",
 
-        out_color: gfx::RawRenderTarget = ("oFragColor",
+        out_color: gfx::RawRenderTarget = ("Target0",
                                            Format(gfx::format::SurfaceType::R8_G8_B8_A8,
                                                   gfx::format::ChannelType::Unorm),
                                            gfx::state::MASK_ALL,
@@ -148,7 +154,7 @@ gfx_defines! {
         render_tasks: gfx::TextureSampler<[f32; 4]> = "sRenderTasks",
         resource_cache: gfx::TextureSampler<[f32; 4]> = "sResourceCache",
 
-        out_color: gfx::RawRenderTarget = ("oFragColor",
+        out_color: gfx::RawRenderTarget = ("Target0",
                                            Format(gfx::format::SurfaceType::R8_G8_B8_A8,
                                                   gfx::format::ChannelType::Unorm),
                                            gfx::state::MASK_ALL,
@@ -170,7 +176,7 @@ gfx_defines! {
         render_tasks: gfx::TextureSampler<[f32; 4]> = "sRenderTasks",
         resource_cache: gfx::TextureSampler<[f32; 4]> = "sResourceCache",
 
-        out_color: gfx::RawRenderTarget = ("oFragColor",
+        out_color: gfx::RawRenderTarget = ("Target0",
                                            Format(gfx::format::SurfaceType::R8_G8_B8_A8,
                                                   gfx::format::ChannelType::Unorm),
                                            gfx::state::MASK_ALL,
@@ -195,7 +201,7 @@ gfx_defines! {
         render_tasks: gfx::TextureSampler<[f32; 4]> = "sRenderTasks",
         resource_cache: gfx::TextureSampler<[f32; 4]> = "sResourceCache",
 
-        out_color: gfx::RawRenderTarget = ("oFragColor",
+        out_color: gfx::RawRenderTarget = ("Target0",
                                            Format(gfx::format::SurfaceType::R8_G8_B8_A8,
                                                   gfx::format::ChannelType::Unorm),
                                            gfx::state::MASK_ALL,
@@ -434,7 +440,7 @@ impl Device {
             vert_src,
             frag_src,
             primitive::Init {
-                out_color: ("oFragColor",
+                out_color: ("Target0",
                             Format(gfx::format::SurfaceType::R8_G8_B8_A8, gfx::format::ChannelType::Unorm),
                             gfx::state::MASK_ALL,
                             Some(ALPHA)),
@@ -446,7 +452,7 @@ impl Device {
             vert_src,
             frag_src,
             primitive::Init {
-                out_color: ("oFragColor",
+                out_color: ("Target0",
                             Format(gfx::format::SurfaceType::R8_G8_B8_A8, gfx::format::ChannelType::Unorm),
                             gfx::state::MASK_ALL,
                             Some(ALPHA)),
@@ -459,7 +465,7 @@ impl Device {
             vert_src,
             frag_src,
             primitive::Init {
-                out_color: ("oFragColor",
+                out_color: ("Target0",
                             Format(gfx::format::SurfaceType::R8_G8_B8_A8, gfx::format::ChannelType::Unorm),
                             gfx::state::MASK_ALL,
                             Some(PREM_ALPHA)),
@@ -471,7 +477,7 @@ impl Device {
             vert_src,
             frag_src,
             primitive::Init {
-                out_color: ("oFragColor",
+                out_color: ("Target0",
                             Format(gfx::format::SurfaceType::R8_G8_B8_A8, gfx::format::ChannelType::Unorm),
                             gfx::state::MASK_ALL,
                             Some(PREM_ALPHA)),
@@ -484,7 +490,7 @@ impl Device {
             vert_src,
             frag_src,
             primitive::Init {
-                out_color: ("oFragColor",
+                out_color: ("Target0",
                             Format(gfx::format::SurfaceType::R8_G8_B8_A8, gfx::format::ChannelType::Unorm),
                             gfx::state::MASK_ALL,
                             Some(SUBPIXEL)),
@@ -496,7 +502,7 @@ impl Device {
             vert_src,
             frag_src,
             primitive::Init {
-                out_color: ("oFragColor",
+                out_color: ("Target0",
                             Format(gfx::format::SurfaceType::R8_G8_B8_A8, gfx::format::ChannelType::Unorm),
                             gfx::state::MASK_ALL,
                             Some(SUBPIXEL)),
@@ -521,7 +527,7 @@ impl Device {
             vert_src,
             frag_src,
             cache::Init {
-                out_color: ("oFragColor",
+                out_color: ("Target0",
                             Format(gfx::format::SurfaceType::R8_G8_B8_A8, gfx::format::ChannelType::Unorm),
                             gfx::state::MASK_ALL,
                             Some(ALPHA)),
@@ -539,7 +545,7 @@ impl Device {
             vert_src,
             frag_src,
             clip::Init {
-                out_color: ("oFragColor",
+                out_color: ("Target0",
                             Format(gfx::format::SurfaceType::R8_G8_B8_A8, gfx::format::ChannelType::Unorm),
                             gfx::state::MASK_ALL,
                             Some(MULTIPLY)),
@@ -551,7 +557,7 @@ impl Device {
             vert_src,
             frag_src,
             clip::Init {
-                out_color: ("oFragColor",
+                out_color: ("Target0",
                             Format(gfx::format::SurfaceType::R8_G8_B8_A8, gfx::format::ChannelType::Unorm),
                             gfx::state::MASK_ALL,
                             Some(MAX)),

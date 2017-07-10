@@ -106,7 +106,7 @@ float distance_to_line(vec2 p0, vec2 perp_dir, vec2 p) {
 //flat varying vec4 vClipMaskUvBounds;
 //varying vec3 vClipMaskUv;
 #ifdef WR_FEATURE_TRANSFORM
-    flat varying vec4 vLocalBounds;
+    //flat varying vec4 vLocalBounds;
 #endif
 
 // TODO(gw): This is here temporarily while we have
@@ -173,13 +173,16 @@ uniform HIGHP_SAMPLER_FLOAT sampler2D sLayers;
 uniform HIGHP_SAMPLER_FLOAT sampler2D sRenderTasks;
 
 // Instanced attributes
-//in ivec4 aData0;
-//in ivec4 aData1;
-/*struct VsInputPrim {
-    vec3 aPosition;
-    ivec4 aData0;
-    ivec4 aData1;
-};*/
+#ifdef WR_DX11
+struct a2v {
+    vec3 pos : aPosition;
+    ivec4 data0 : aDataA;
+    ivec4 data1 : aDataB;
+};
+#else
+in ivec4 aDataA;
+in ivec4 aDataB;
+#endif
 
 // get_fetch_uv is a macro to work around a macOS Intel driver parsing bug.
 // TODO: convert back to a function once the driver issues are resolved, if ever.
@@ -681,6 +684,9 @@ vec2 compute_snap_offset(vec2 local_pos,
 struct VertexInfo {
     vec2 local_pos;
     vec2 screen_pos;
+#ifdef WR_DX11
+    vec4 out_pos;
+#endif
 };
 
 VertexInfo write_vertex(vec3 aPosition,
@@ -716,9 +722,17 @@ VertexInfo write_vertex(vec3 aPosition,
                      task.screen_space_origin +
                      task.render_target_origin;
 
+#ifdef WR_DX11
+    vec4 out_pos = mul(uTransform, vec4(final_pos, z, 1.0));
+    VertexInfo vi;
+    vi.local_pos = clamped_local_pos;
+    vi.screen_pos = device_pos;
+    vi.out_pos = out_pos;
+#else
     gl_Position = uTransform * vec4(final_pos, z, 1.0);
-
     VertexInfo vi = VertexInfo(clamped_local_pos, device_pos);
+#endif
+
     return vi;
 }
 
@@ -727,6 +741,9 @@ VertexInfo write_vertex(vec3 aPosition,
 struct TransformVertexInfo {
     vec3 local_pos;
     vec2 screen_pos;
+#ifdef WR_DX11
+    vec4 out_pos;
+#endif
 };
 
 float cross2(vec2 v0, vec2 v1) {
@@ -760,7 +777,8 @@ TransformVertexInfo write_transform_vertex(RectWithSize instance_rect,
 
     // Select the current vertex and the previous/next vertices,
     // based on the vertex ID that is known based on the instance rect.
-    switch (gl_VertexID) {
+    //TODO pass the vertex_id via param (from dx struct)
+    switch (0) {
         case 0:
             current_local_pos = vec2(local_rect.p0.x, local_rect.p0.y);
             next_local_pos = vec2(local_rect.p0.x, local_rect.p1.y);
@@ -829,11 +847,18 @@ TransformVertexInfo write_transform_vertex(RectWithSize instance_rect,
                      task.screen_space_origin +
                      task.render_target_origin;
 
+    //vLocalBounds = vec4(local_rect.p0, local_rect.p1);
+#ifdef WR_DX11
+    vec4 out_pos = mul(uTransform, vec4(final_pos, z, 1.0));
+    TransformVertexInfo tvi;
+    tvi.local_pos = layer_pos.xyw;
+    tvi.screen_pos = device_pos;
+    tvi.out_pos = out_pos;
+    return tvi;
+#else
     gl_Position = uTransform * vec4(final_pos, z, 1.0);
-
-    vLocalBounds = vec4(local_rect.p0, local_rect.p1);
-
     return TransformVertexInfo(layer_pos.xyw, device_pos);
+#endif
 }
 
 #endif //WR_FEATURE_TRANSFORM
@@ -845,7 +870,10 @@ struct GlyphResource {
 
 GlyphResource fetch_glyph_resource(int address) {
     ResourceCacheData2 data = fetch_from_resource_cache_2(address);
-    return GlyphResource(data.data0, data.data1.xy);
+    GlyphResource glyph_res;
+    glyph_res.uv_rect = data.data0;
+    glyph_res.offset = data.data1.xy;
+    return glyph_res;
 }
 
 struct ImageResource {
@@ -854,7 +882,9 @@ struct ImageResource {
 
 ImageResource fetch_image_resource(int address) {
     vec4 data = fetch_from_resource_cache_1(address);
-    return ImageResource(data);
+    ImageResource img_res;
+    img_res.uv_rect = data;
+    return img_res;
 }
 
 struct Rectangle {
@@ -863,7 +893,9 @@ struct Rectangle {
 
 Rectangle fetch_rectangle(int address) {
     vec4 data = fetch_from_resource_cache_1(address);
-    return Rectangle(data);
+    Rectangle rect;
+    rect.color = data;
+    return rect;
 }
 
 struct TextRun {
@@ -872,7 +904,9 @@ struct TextRun {
 
 TextRun fetch_text_run(int address) {
     vec4 data = fetch_from_resource_cache_1(address);
-    return TextRun(data);
+    TextRun text_run;
+    text_run.color = data;
+    return text_run;
 }
 
 struct Image {
@@ -883,7 +917,10 @@ struct Image {
 
 Image fetch_image(int address) {
     ResourceCacheData2 data = fetch_from_resource_cache_2(address);
-    return Image(data.data0, data.data1);
+    Image img;
+    img.stretch_size_and_tile_spacing = data.data0;
+    img.sub_rect = data.data1;
+    return img;
 }
 
 struct YuvImage {
@@ -892,7 +929,9 @@ struct YuvImage {
 
 YuvImage fetch_yuv_image(int address) {
     vec4 data = fetch_from_resource_cache_1(address);
-    return YuvImage(data.xy);
+    YuvImage yuv_img;
+    yuv_img.size = data.xy;
+    return yuv_img;
 }
 
 struct BoxShadow {
@@ -904,7 +943,12 @@ struct BoxShadow {
 
 BoxShadow fetch_boxshadow(int address) {
     ResourceCacheData4 data = fetch_from_resource_cache_4(address);
-    return BoxShadow(data.data0, data.data1, data.data2, data.data3);
+    BoxShadow box_shadow;
+    box_shadow.src_rect = data.data0;
+    box_shadow.bs_rect = data.data1;
+    box_shadow.color = data.data2;
+    box_shadow.border_radius_edge_size_blur_radius_inverted = data.data3;
+    return box_shadow;
 }
 
 void write_clip(vec2 global_pos, ClipArea area) {
@@ -920,21 +964,21 @@ void write_clip(vec2 global_pos, ClipArea area) {
 #ifdef WR_FEATURE_TRANSFORM
 float signed_distance_rect(vec2 pos, vec2 p0, vec2 p1) {
     vec2 d = max(p0 - pos, pos - p1);
-    return length(max(vec2(0.0), d)) + min(0.0, max(d.x, d.y));
+    return length(max(vec2(0.0, 0.0), d)) + min(0.0, max(d.x, d.y));
 }
 
 vec2 init_transform_fs(vec3 local_pos, out float fragment_alpha) {
     fragment_alpha = 1.0;
     vec2 pos = local_pos.xy / local_pos.z;
 
-    // Now get the actual signed distance.
+    /*// Now get the actual signed distance.
     float d = signed_distance_rect(pos, vLocalBounds.xy, vLocalBounds.zw);
 
     // Find the appropriate distance to apply the AA smoothstep over.
     float afwidth = 0.5 * length(fwidth(pos.xy));
 
     // Only apply AA to fragments outside the signed distance field.
-    fragment_alpha = 1.0 - smoothstep(0.0, afwidth, d);
+    fragment_alpha = 1.0 - smoothstep(0.0, afwidth, d);*/
 
     return pos;
 }

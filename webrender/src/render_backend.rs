@@ -539,8 +539,8 @@ impl RenderBackend {
         //           each time it's used. This is due to some nastiness
         //           in initialization order for Servo. Perhaps find a
         //           cleaner way to do this, or use the OnceMutex on crates.io?
-        let mut notifier = self.notifier.lock();
-        notifier.as_mut().unwrap().as_mut().unwrap().new_frame_ready();
+        //let mut notifier = self.notifier.lock();
+        //notifier.as_mut().unwrap().as_mut().unwrap().new_frame_ready();
     }
 
     fn notify_compositor_of_new_scroll_frame(&mut self, composite_needed: bool) {
@@ -548,8 +548,8 @@ impl RenderBackend {
         //           each time it's used. This is due to some nastiness
         //           in initialization order for Servo. Perhaps find a
         //           cleaner way to do this, or use the OnceMutex on crates.io?
-        let mut notifier = self.notifier.lock();
-        notifier.as_mut().unwrap().as_mut().unwrap().new_scroll_frame_ready(composite_needed);
+        //let mut notifier = self.notifier.lock();
+        //notifier.as_mut().unwrap().as_mut().unwrap().new_scroll_frame_ready(composite_needed);
     }
 
     fn handle_vr_compositor_command(&mut self, ctx_id: WebGLContextId, cmd: VRCompositorCommand) {
