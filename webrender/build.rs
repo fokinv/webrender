@@ -7,6 +7,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::io::prelude::*;
 use std::fs::{canonicalize, read_dir, File};
+use std::process::{self, Command, Stdio};
 
 #[cfg(not(any(target_arch = "arm", target_arch = "aarch64", target_os = "windows")))]
 const SHADER_VERSION: &'static str = "#version 150\n";
@@ -218,14 +219,48 @@ fn create_shaders(glsl_files: Vec<PathBuf>, out_dir: String) {
                     _ => unreachable!(),
                 }
             }
+            let supported = file_name.ends_with("ps_rectangle");
             if is_vert {
                 file_name.push_str(".vert");
             } else {
                 file_name.push_str(".frag");
             }
-            let file_path = Path::new(&out_dir).join(file_name);
-            let mut file = File::create(file_path).unwrap();
+            let file_path = Path::new(&out_dir).join(&file_name);
+            let mut file = File::create(&file_path).unwrap();
             write!(file, "{}", shader_source).unwrap();
+            if cfg!(target_os = "windows") && supported {
+                file_name.push_str(".fx");
+                let fx_file_path = Path::new(&out_dir).join(&file_name);
+                println!("compile {:?}", fx_file_path);
+                //let sdk_path = env::var("DXSDK_DIR").ok().expect("Please set the DXSDK_DIR enviroment variable");
+                //let sdk_path = Path::new(&sdk_path);
+                let pf_path = env::var("ProgramFiles(x86)").ok().expect("Please set the ProgramFiles(x86) enviroment variable");
+                let pf_path = Path::new(&pf_path);
+                let format = if is_vert {
+                    "vs_5_0"
+                } else {
+                    "ps_5_0"
+                };
+                println!("{:?}", Command::new(pf_path.join("Windows Kits").join("8.1").join("bin").join("x64").join("fxc.exe"))
+                    .arg("/T")
+                    .arg(format)
+                    .arg("/Fo")
+                    .arg(&fx_file_path)
+                    .arg(&file_path));
+                if Command::new(pf_path.join("Windows Kits").join("8.1").join("bin").join("x64").join("fxc.exe"))
+                    .arg("/T")
+                    .arg(format)
+                    .arg("/Fo")
+                    .arg(&fx_file_path)
+                    .arg(&file_path)
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .status().unwrap().code().unwrap() != 0
+                {
+                    println!("Error while executing fxc");
+                    process::exit(1)
+                }
+            }
         }
     }
 }
