@@ -18,6 +18,8 @@ const SHADER_VERSION: &'static str = "#version 300 es\n";
 #[cfg(any(target_os = "windows"))]
 const SHADER_VERSION: &'static str = "";
 
+const SUPPORTED_SHADERS: &'static [&'static str] = &["ps_rectangle."];
+
 fn write_shaders(glsl_files: Vec<PathBuf>, shader_file_path: &Path) {
     let mut shader_file = File::create(shader_file_path).unwrap();
 
@@ -43,7 +45,7 @@ fn write_shaders(glsl_files: Vec<PathBuf>, shader_file_path: &Path) {
     write!(shader_file, "}}\n").unwrap();
 }
 
-fn create_shaders(glsl_files: Vec<PathBuf>, out_dir: String) {
+fn create_shaders(glsl_files: Vec<PathBuf>, out_dir: String) -> Vec<String> {
     fn gen_shaders(glsl_files: Vec<PathBuf>) -> HashMap<String, String> {
         let mut shaders: HashMap<String, String> = HashMap::with_capacity(glsl_files.len());
         for glsl in glsl_files {
@@ -72,6 +74,7 @@ fn create_shaders(glsl_files: Vec<PathBuf>, out_dir: String) {
     let shared_src = shaders.get("shared").unwrap();
     let prim_shared_src = shaders.get("prim_shared").unwrap();
     let clip_shared_src = shaders.get("clip_shared").unwrap();
+    let mut file_name_vector = vec![];
 
     for (filename, file_source) in shaders {
         let is_prim = filename.starts_with("ps_");
@@ -219,47 +222,52 @@ fn create_shaders(glsl_files: Vec<PathBuf>, out_dir: String) {
                     _ => unreachable!(),
                 }
             }
-            let supported = file_name.ends_with("ps_rectangle");
             if is_vert {
                 file_name.push_str(".vert");
             } else {
                 file_name.push_str(".frag");
             }
             let file_path = Path::new(&out_dir).join(&file_name);
+            //println!("{:?}", file_path);
             let mut file = File::create(&file_path).unwrap();
             write!(file, "{}", shader_source).unwrap();
-            if cfg!(target_os = "windows") && supported {
-                file_name.push_str(".fx");
-                let fx_file_path = Path::new(&out_dir).join(&file_name);
-                println!("compile {:?}", fx_file_path);
-                //let sdk_path = env::var("DXSDK_DIR").ok().expect("Please set the DXSDK_DIR enviroment variable");
-                //let sdk_path = Path::new(&sdk_path);
-                let pf_path = env::var("ProgramFiles(x86)").ok().expect("Please set the ProgramFiles(x86) enviroment variable");
-                let pf_path = Path::new(&pf_path);
-                let format = if is_vert {
-                    "vs_5_0"
-                } else {
-                    "ps_5_0"
-                };
-                println!("{:?}", Command::new(pf_path.join("Windows Kits").join("8.1").join("bin").join("x64").join("fxc.exe"))
-                    .arg("/T")
-                    .arg(format)
-                    .arg("/Fo")
-                    .arg(&fx_file_path)
-                    .arg(&file_path));
-                if Command::new(pf_path.join("Windows Kits").join("8.1").join("bin").join("x64").join("fxc.exe"))
-                    .arg("/T")
-                    .arg(format)
-                    .arg("/Fo")
-                    .arg(&fx_file_path)
-                    .arg(&file_path)
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .status().unwrap().code().unwrap() != 0
-                {
-                    println!("Error while executing fxc");
-                    process::exit(1)
-                }
+            file_name_vector.push(file_name);
+        }
+    }
+    return file_name_vector;
+}
+
+#[cfg(any(target_os = "windows"))]
+fn compile_fx_files(file_name_vector: Vec<String>, out_dir: String) {
+    for mut file_name in file_name_vector {
+        let is_vert = file_name.ends_with(".vert");
+        let supported = SUPPORTED_SHADERS.iter().any(|s| file_name.contains(s));
+        let file_path = Path::new(&out_dir).join(&file_name);
+        if cfg!(target_os = "windows") && supported {
+            file_name.push_str(".fx");
+            let fx_file_path = Path::new(&out_dir).join(&file_name);
+            //let sdk_path = env::var("DXSDK_DIR").ok().expect("Please set the DXSDK_DIR enviroment variable");
+            //let sdk_path = PaŁth::new(&sdk_path);
+            let pf_path = env::var("ProgramFiles(x86)").ok().expect("Please set the ProgramFiles(x86) enviroment variable");
+            let pf_path = Path::new(&pf_path);
+            let format = if is_vert {
+                "vs_5_0"
+            } else {
+                "ps_5_0"
+            };
+            let mut command = Command::new(pf_path.join("Windows Kits").join("8.1").join("bin").join("x64").join("fxc.exe").to_str().unwrap());
+            command.arg("/T");
+            command.arg(format);
+            command.arg("/Fo");
+            command.arg(&fx_file_path);
+            command.arg(&file_path);
+            println!("{:?}", command);
+            if command.stdout(Stdio::inherit())
+                      .stderr(Stdio::inherit())
+                      .status().unwrap().code().unwrap() != 0
+            {
+                println!("Error while executing fxc");
+                process::exit(1)
             }
         }
     }
@@ -284,5 +292,7 @@ fn main() {
     }
 
     write_shaders(glsl_files.clone(), &shaders_file);
-    create_shaders(glsl_files, out_dir);
+    let file_name_vector = create_shaders(glsl_files.clone(), out_dir.clone());
+    #[cfg(any(target_os = "windows"))]
+    compile_fx_files(file_name_vector, out_dir);
 }
