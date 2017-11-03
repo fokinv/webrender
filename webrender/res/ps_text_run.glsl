@@ -4,12 +4,12 @@
 
 #include shared,prim_shared
 
-flat varying vec4 vColor;
-varying vec3 vUv;
-flat varying vec4 vUvBorder;
+LAYOUT(6, flat varying vec4 vColor);
+LAYOUT(7, varying vec3 vUv);
+LAYOUT(8, flat varying vec4 vUvBorder);
 
 #ifdef WR_FEATURE_TRANSFORM
-varying vec3 vLocalPos;
+LAYOUT(9, varying vec3 vLocalPos);
 #endif
 
 #ifdef WR_VERTEX_SHADER

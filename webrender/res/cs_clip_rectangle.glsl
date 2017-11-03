@@ -4,12 +4,12 @@
 
 #include shared,prim_shared,clip_shared,ellipse
 
-varying vec3 vPos;
-flat varying float vClipMode;
-flat varying vec4 vClipCenter_Radius_TL;
-flat varying vec4 vClipCenter_Radius_TR;
-flat varying vec4 vClipCenter_Radius_BL;
-flat varying vec4 vClipCenter_Radius_BR;
+LAYOUT(6, varying vec3 vPos);
+LAYOUT(7, flat varying float vClipMode);
+LAYOUT(8, flat varying vec4 vClipCenter_Radius_TL);
+LAYOUT(9, flat varying vec4 vClipCenter_Radius_TR);
+LAYOUT(10, flat varying vec4 vClipCenter_Radius_BL);
+LAYOUT(11, flat varying vec4 vClipCenter_Radius_BR);
 
 #ifdef WR_VERTEX_SHADER
 struct ClipRect {

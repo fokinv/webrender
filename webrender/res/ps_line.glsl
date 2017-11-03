@@ -8,16 +8,16 @@
 
 #include shared,prim_shared
 
-varying vec4 vColor;
-flat varying int vStyle;
-flat varying float vAxisSelect;
-flat varying vec4 vParams;
-flat varying vec2 vLocalOrigin;
+LAYOUT(6, varying vec4 vColor);
+LAYOUT(7, flat varying int vStyle);
+LAYOUT(8, flat varying float vAxisSelect);
+LAYOUT(9, flat varying vec4 vParams);
+LAYOUT(10, flat varying vec2 vLocalOrigin);
 
 #ifdef WR_FEATURE_TRANSFORM
-varying vec3 vLocalPos;
+LAYOUT(11, varying vec3 vLocalPos);
 #else
-varying vec2 vLocalPos;
+LAYOUT(11, varying vec2 vLocalPos);
 #endif
 
 #ifdef WR_VERTEX_SHADER

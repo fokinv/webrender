@@ -4,18 +4,18 @@
 
 #include shared,prim_shared,shared_border
 
-flat varying vec4 vColor0;
-flat varying vec4 vColor1;
-flat varying vec2 vEdgeDistance;
-flat varying float vAxisSelect;
-flat varying float vAlphaSelect;
-flat varying vec4 vClipParams;
-flat varying float vClipSelect;
+LAYOUT(6, flat varying vec4 vColor0);
+LAYOUT(7, flat varying vec4 vColor1);
+LAYOUT(8, flat varying vec2 vEdgeDistance);
+LAYOUT(9, flat varying float vAxisSelect);
+LAYOUT(10, flat varying float vAlphaSelect);
+LAYOUT(11, flat varying vec4 vClipParams);
+LAYOUT(12, flat varying float vClipSelect);
 
 #ifdef WR_FEATURE_TRANSFORM
-varying vec3 vLocalPos;
+LAYOUT(13, varying vec3 vLocalPos);
 #else
-varying vec2 vLocalPos;
+LAYOUT(14, varying vec2 vLocalPos);
 #endif
 
 #ifdef WR_VERTEX_SHADER

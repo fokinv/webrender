@@ -5,27 +5,27 @@
 #include shared,prim_shared,shared_border,ellipse
 
 // Edge color transition
-flat varying vec4 vColor00;
-flat varying vec4 vColor01;
-flat varying vec4 vColor10;
-flat varying vec4 vColor11;
-flat varying vec4 vColorEdgeLine;
+LAYOUT(6, flat varying vec4 vColor00);
+LAYOUT(7, flat varying vec4 vColor01);
+LAYOUT(8, flat varying vec4 vColor10);
+LAYOUT(9, flat varying vec4 vColor11);
+LAYOUT(10, flat varying vec4 vColorEdgeLine);
 
 // Border radius
-flat varying vec2 vClipCenter;
-flat varying vec4 vRadii0;
-flat varying vec4 vRadii1;
-flat varying vec2 vClipSign;
-flat varying vec4 vEdgeDistance;
-flat varying float vSDFSelect;
+LAYOUT(11, flat varying vec2 vClipCenter);
+LAYOUT(12, flat varying vec4 vRadii0);
+LAYOUT(13, flat varying vec4 vRadii1);
+LAYOUT(14, flat varying vec2 vClipSign);
+LAYOUT(15, flat varying vec4 vEdgeDistance);
+LAYOUT(16, flat varying float vSDFSelect);
 
 // Border style
-flat varying float vAlphaSelect;
+LAYOUT(17, flat varying float vAlphaSelect);
 
 #ifdef WR_FEATURE_TRANSFORM
-varying vec3 vLocalPos;
+LAYOUT(18, varying vec3 vLocalPos);
 #else
-varying vec2 vLocalPos;
+LAYOUT(18, varying vec2 vLocalPos);
 #endif
 
 #ifdef WR_VERTEX_SHADER

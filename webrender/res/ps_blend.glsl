@@ -4,10 +4,10 @@
 
 #include shared,prim_shared
 
-varying vec3 vUv;
-flat varying vec4 vUvBounds;
-flat varying float vAmount;
-flat varying int vOp;
+LAYOUT(6, varying vec3 vUv);
+LAYOUT(7, flat varying vec4 vUvBounds);
+LAYOUT(8, flat varying float vAmount);
+LAYOUT(9, flat varying int vOp);
 
 #ifdef WR_VERTEX_SHADER
 void main(void) {

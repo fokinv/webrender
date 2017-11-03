@@ -4,14 +4,14 @@
 
 #include shared,prim_shared,clip_shared
 
-varying vec3 vPos;
+LAYOUT(6, varying vec3 vPos);
 
-flat varying vec2 vClipCenter;
+LAYOUT(7, flat varying vec2 vClipCenter);
 
-flat varying vec4 vPoint_Tangent0;
-flat varying vec4 vPoint_Tangent1;
-flat varying vec3 vDotParams;
-flat varying vec2 vAlphaMask;
+LAYOUT(8, flat varying vec4 vPoint_Tangent0);
+LAYOUT(9, flat varying vec4 vPoint_Tangent1);
+LAYOUT(10, flat varying vec3 vDotParams);
+LAYOUT(11, flat varying vec2 vAlphaMask);
 
 #ifdef WR_VERTEX_SHADER
 // Matches BorderCorner enum in border.rs

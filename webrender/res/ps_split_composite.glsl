@@ -4,9 +4,9 @@
 
 #include shared,prim_shared
 
-varying vec3 vUv;
-flat varying vec4 vUvTaskBounds;
-flat varying vec4 vUvSampleBounds;
+LAYOUT(6, varying vec3 vUv);
+LAYOUT(7, flat varying vec4 vUvTaskBounds);
+LAYOUT(8, flat varying vec4 vUvSampleBounds);
 
 #ifdef WR_VERTEX_SHADER
 struct SplitGeometry {

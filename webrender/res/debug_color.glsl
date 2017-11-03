@@ -4,10 +4,10 @@
 
 #include shared,shared_other
 
-varying vec4 vColor;
+LAYOUT(0, varying vec4 vColor);
 
 #ifdef WR_VERTEX_SHADER
-in vec4 aColor;
+LAYOUT(0, in vec4 aColor);
 
 void main(void) {
     vColor = aColor;

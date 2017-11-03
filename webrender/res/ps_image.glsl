@@ -7,19 +7,19 @@
 // If this is in WR_FEATURE_TEXTURE_RECT mode, the rect and size use non-normalized
 // texture coordinates. Otherwise, it uses normalized texture coordinates. Please
 // check GL_TEXTURE_RECTANGLE.
-flat varying vec2 vTextureOffset; // Offset of this image into the texture atlas.
-flat varying vec2 vTextureSize;   // Size of the image in the texture atlas.
-flat varying vec2 vTileSpacing;   // Amount of space between tiled instances of this image.
-flat varying vec4 vStRect;        // Rectangle of valid texture rect.
-flat varying float vLayer;
+LAYOUT(6, flat varying vec2 vTextureOffset); // Offset of this image into the texture atlas.
+LAYOUT(7, flat varying vec2 vTextureSize);   // Size of the image in the texture atlas.
+LAYOUT(8, flat varying vec2 vTileSpacing);   // Amount of space between tiled instances of this image.
+LAYOUT(9, flat varying vec4 vStRect);        // Rectangle of valid texture rect.
+LAYOUT(10, flat varying float vLayer);
 
 #ifdef WR_FEATURE_TRANSFORM
-varying vec3 vLocalPos;
-flat varying vec4 vLocalRect;
+LAYOUT(11, varying vec3 vLocalPos);
+LAYOUT(13, flat varying vec4 vLocalRect);
 #else
-varying vec2 vLocalPos;
+LAYOUT(11, varying vec2 vLocalPos);
 #endif
-flat varying vec2 vStretchSize;
+LAYOUT(12, flat varying vec2 vStretchSize);
 
 #ifdef WR_VERTEX_SHADER
 void main(void) {

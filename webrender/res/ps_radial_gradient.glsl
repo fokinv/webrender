@@ -4,18 +4,18 @@
 
 #include shared,prim_shared
 
-flat varying int vGradientAddress;
-flat varying float vGradientRepeat;
+LAYOUT(6, flat varying int vGradientAddress);
+LAYOUT(7, flat varying float vGradientRepeat);
 
-flat varying vec2 vStartCenter;
-flat varying vec2 vEndCenter;
-flat varying float vStartRadius;
-flat varying float vEndRadius;
+LAYOUT(8, flat varying vec2 vStartCenter);
+LAYOUT(9, flat varying vec2 vEndCenter);
+LAYOUT(10, flat varying float vStartRadius);
+LAYOUT(11, flat varying float vEndRadius);
 
-flat varying vec2 vTileSize;
-flat varying vec2 vTileRepeat;
+LAYOUT(12, flat varying vec2 vTileSize);
+LAYOUT(13, flat varying vec2 vTileRepeat);
 
-varying vec2 vPos;
+LAYOUT(14, varying vec2 vPos);
 
 #ifdef WR_VERTEX_SHADER
 void main(void) {

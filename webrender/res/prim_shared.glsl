@@ -34,10 +34,10 @@ float distance_to_line(vec2 p0, vec2 perp_dir, vec2 p) {
 }
 
 // TODO: convert back to RectWithEndPoint if driver issues are resolved, if ever.
-flat varying vec4 vClipMaskUvBounds;
-varying vec3 vClipMaskUv;
+LAYOUT(1, flat varying vec4 vClipMaskUvBounds);
+LAYOUT(2, varying vec3 vClipMaskUv);
 #ifdef WR_FEATURE_TRANSFORM
-    flat varying vec4 vLocalBounds;
+    LAYOUT(3, flat varying vec4 vLocalBounds);
 #endif
 
 // TODO(gw): This is here temporarily while we have
@@ -82,8 +82,8 @@ uniform HIGHP_SAMPLER_FLOAT sampler2D sLayers;
 uniform HIGHP_SAMPLER_FLOAT sampler2D sRenderTasks;
 
 // Instanced attributes
-in ivec4 aDataA;
-in ivec4 aDataB;
+LAYOUT(4, in ivec4 aDataA);
+LAYOUT(5, in ivec4 aDataB);
 
 // get_fetch_uv is a macro to work around a macOS Intel driver parsing bug.
 // TODO: convert back to a function once the driver issues are resolved, if ever.

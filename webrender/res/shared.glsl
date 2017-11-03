@@ -23,20 +23,41 @@
 #define TEX_SAMPLE(sampler, tex_coord) textureLod(sampler, tex_coord, 0.0)
 #endif
 
+#ifdef VULKAN
+    #extension GL_ARB_shading_language_420pack : enable
+    #extension GL_ARB_explicit_attrib_location : enable
+    #extension GL_ARB_separate_shader_objects : enable
+    #define gl_InstanceID gl_InstanceIndex
+    #define gl_VertexID gl_VertexIndex
+    #define LAYOUT(index, attribute) layout(location = index) attribute
+
+#else
+    #define LAYOUT(index, attribute) attribute
+#endif
+
 //======================================================================================
 // Vertex shader attributes and uniforms
 //======================================================================================
 #ifdef WR_VERTEX_SHADER
     // A generic uniform that shaders can optionally use to configure
     // an operation mode for this batch.
-    uniform int uMode;
 
     // Uniform inputs
-    uniform mat4 uTransform;       // Orthographic projection
-    uniform float uDevicePixelRatio;
+    //uniform mat4 uTransform;       // Orthographic projection
+    //uniform float uDevicePixelRatio;
+    #ifdef VULKAN
+    layout(set = 0, binding = 0) uniform Locals {
+    layout(set = 1) uniform int uMode;
+    #else
+    uniform int uMode;
+    uniform Locals {
+    #endif
+          uniform mat4 uTransform;       // Orthographic projection
+          uniform float uDevicePixelRatio;
+    };
 
     // Attribute inputs
-    in vec3 aPosition;
+    LAYOUT(0, in vec3 aPosition);
 #endif
 
 //======================================================================================
@@ -46,7 +67,7 @@
     // Uniform inputs
 
     // Fragment shader outputs
-    out vec4 Target0;
+    LAYOUT(0, out vec4 Target0);
 #endif
 
 //======================================================================================

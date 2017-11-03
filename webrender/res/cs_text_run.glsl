@@ -6,8 +6,8 @@
 
 #include shared,prim_shared
 
-varying vec3 vUv;
-flat varying vec4 vColor;
+LAYOUT(6, varying vec3 vUv);
+LAYOUT(7, flat varying vec4 vColor);
 
 #ifdef WR_VERTEX_SHADER
 // Draw a text run to a cache target. These are always

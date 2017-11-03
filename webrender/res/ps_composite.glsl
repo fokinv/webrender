@@ -4,9 +4,9 @@
 
 #include shared,prim_shared
 
-varying vec3 vUv0;
-varying vec3 vUv1;
-flat varying int vOp;
+LAYOUT(6, varying vec3 vUv0);
+LAYOUT(7, varying vec3 vUv1);
+LAYOUT(8, flat varying int vOp);
 
 #ifdef WR_VERTEX_SHADER
 struct ReadbackTask {

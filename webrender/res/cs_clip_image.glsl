@@ -4,10 +4,10 @@
 
 #include shared,prim_shared,clip_shared
 
-varying vec3 vPos;
-flat varying vec4 vClipMaskUvRect;
-flat varying vec4 vClipMaskUvInnerRect;
-flat varying float vLayer;
+LAYOUT(6, varying vec3 vPos);
+LAYOUT(7, flat varying vec4 vClipMaskUvRect);
+LAYOUT(8, flat varying vec4 vClipMaskUvInnerRect);
+LAYOUT(9, flat varying float vLayer);
 
 #ifdef WR_VERTEX_SHADER
 struct ImageMaskData {

@@ -13,7 +13,7 @@ profiler = ["thread_profiler/thread_profiler"]
 debugger = ["ws", "serde_json", "serde", "serde_derive"]
 query = []
 dx11 = ["gfx_device_dx11", "gfx_window_dxgi"]
-
+vulkan = []
 
 [dependencies]
 app_units = "0.5.6"
