@@ -442,7 +442,6 @@ impl Program {
         device.encoder.copy_buffer(&self.upload.0, &self.data.ibuf, self.upload.1, 0, instances.len()).unwrap();
         self.upload.1 += instances.len();
 
-        println!("bind={:?}", device.bound_textures);
         self.data.color0 = device.get_texture_srv_and_sampler(TextureSampler::Color0);
         self.data.color1 = device.get_texture_srv_and_sampler(TextureSampler::Color1);
         self.data.color2 = device.get_texture_srv_and_sampler(TextureSampler::Color2);
@@ -451,9 +450,6 @@ impl Program {
         self.data.shared_cache_a8.0 = device.get_texture_srv_and_sampler(TextureSampler::SharedCacheA8).0;
 
         if render_target.is_some() {
-            if device.cache_a8_textures.contains_key(&render_target.unwrap().0) {
-                println!("!!!!!!!!!!!!! WARNING wrong texture id {:?}", render_target);
-            }
             let tex = device.cache_rgba8_textures.get(&render_target.unwrap().0).unwrap();
             self.data.out_color = tex.rtv.raw().clone();
             self.data.out_depth = tex.dsv.clone();
@@ -539,7 +535,6 @@ impl BrushProgram {
         device.encoder.copy_buffer(&self.upload.0, &self.data.ibuf, self.upload.1, 0, instances.len()).unwrap();
         self.upload.1 += instances.len();
 
-        println!("bind={:?}", device.bound_textures);
         self.data.color0 = device.get_texture_srv_and_sampler(TextureSampler::Color0);
         self.data.color1 = device.get_texture_srv_and_sampler(TextureSampler::Color1);
         self.data.color2 = device.get_texture_srv_and_sampler(TextureSampler::Color2);
@@ -548,9 +543,6 @@ impl BrushProgram {
         self.data.shared_cache_a8.0 = device.get_texture_srv_and_sampler(TextureSampler::SharedCacheA8).0;
 
         if render_target.is_some() {
-            if device.cache_a8_textures.contains_key(&render_target.unwrap().0) {
-                println!("!!!!!!!!!!!!! cache_a8 {:?}", render_target);
-            }
             let tex = device.cache_rgba8_textures
                     .get(&render_target.unwrap().0)
                     .unwrap_or(device.cache_a8_textures.get(&render_target.unwrap().0)
@@ -642,7 +634,6 @@ impl TextProgram {
         device.encoder.copy_buffer(&self.upload.0, &self.data.ibuf, self.upload.1, 0, instances.len()).unwrap();
         self.upload.1 += instances.len();
 
-        println!("bind={:?}", device.bound_textures);
         self.data.color0 = device.get_texture_srv_and_sampler(TextureSampler::Color0);
         self.data.color1 = device.get_texture_srv_and_sampler(TextureSampler::Color1);
         self.data.color2 = device.get_texture_srv_and_sampler(TextureSampler::Color2);
@@ -722,15 +713,10 @@ impl BlurProgram {
         device.encoder.copy_buffer(&self.upload.0, &self.data.ibuf, self.upload.1, 0, instances.len()).unwrap();
         self.upload.1 += instances.len();
 
-        println!("bind={:?}", device.bound_textures);
         self.data.cache_rgba8.0 = device.get_texture_srv_and_sampler(TextureSampler::CacheRGBA8).0;
         self.data.cache_a8.0 = device.get_texture_srv_and_sampler(TextureSampler::CacheA8).0;
 
-        println!("********RT = {:?}", render_target);
         if render_target.is_some() {
-            if device.cache_a8_textures.contains_key(&render_target.unwrap().0) {
-                println!("!!!!!!!!!!!!! cache_a8 blur{:?}", render_target);
-            }
             let tex = device.cache_rgba8_textures
                     .get(&render_target.unwrap().0)
                     .unwrap_or(device.cache_a8_textures.get(&render_target.unwrap().0)
@@ -817,7 +803,6 @@ impl ClipProgram {
         device.encoder.copy_buffer(&self.upload.0, &self.data.ibuf, self.upload.1, 0, instances.len()).unwrap();
         self.upload.1 += instances.len();
         self.data.out_color = device.cache_a8_textures.get(&render_target).unwrap().rtv.raw().clone();
-        println!("bind={:?}", device.bound_textures);
         self.data.color0 = device.get_texture_srv_and_sampler(TextureSampler::Color0);
         self.data.color1 = device.get_texture_srv_and_sampler(TextureSampler::Color1);
         self.data.color2 = device.get_texture_srv_and_sampler(TextureSampler::Color2);
@@ -871,9 +856,6 @@ impl DebugColorProgram {
         };
         device.encoder.update_buffer(&self.data.locals, &[locals], 0).unwrap();
         if render_target.is_some() {
-            if device.cache_a8_textures.contains_key(&render_target.unwrap().0) {
-                println!("!!!!!!!!!!!!! cache_a8 debug_color{:?}", render_target);
-            }
             let tex = device.cache_rgba8_textures
                     .get(&render_target.unwrap().0)
                     .unwrap_or(device.cache_a8_textures.get(&render_target.unwrap().0)

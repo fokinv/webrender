@@ -562,7 +562,6 @@ impl Device {
         let dst_tex = Typed::new(dst_tex_raw);
 
         let (data, row_pitch) = self.factory.map_texture_read::<gfx::format::R8_G8_B8_A8>(&dst_tex);
-        println!("\n\nrect = {:?}\noutput len = {:?}\ndata len = {:?}\n\n", rect, output.len(), data.len()*4);
         //output.clone_from_slice(gfx::memory::cast_slice(data));
         for j in 0..rect.size.height as usize {
             for i in 0..rect.size.width as usize {
@@ -627,7 +626,6 @@ impl Device {
     pub fn create_cache_texture(&mut self, width: u32, height: u32, kind: RenderTargetKind) -> TextureId
     {
         let id = self.generate_texture_id();
-        println!("create_cache_texture={:?}", id);
         match kind {
             RenderTargetKind::Alpha => {
                 let tex = CacheTexture::create(&mut self.factory, [width as usize, height as usize]).unwrap();
@@ -643,7 +641,6 @@ impl Device {
 
     pub fn create_image_texture(&mut self, width: u32, height: u32, layer_count: i32, filter: TextureFilter, format: ImageFormat) -> TextureId {
         let id = self.generate_texture_id();
-        println!("create_image_texture={:?}", id);
         let tex = ImageTexture::create(&mut self.factory, [width as usize, height as usize], layer_count as u16, filter, format).unwrap();
         self.image_textures.insert(id, tex);
         id
@@ -686,7 +683,6 @@ impl Device {
         stride: Option<u32>,
         offset: usize)
     {
-        println!("update_image_data={:?}", texture_id);
         let data = {
             let texture = self.image_textures.get(texture_id).unwrap();
             match texture.format {
@@ -719,7 +715,6 @@ impl Device {
         stride: Option<u32>,
         offset: usize)
     {
-        println!("update_image_data={:?}", texture_id);
         let mut texture = self.image_textures.get_mut(texture_id).unwrap();
         let data = {
             match texture.format {
@@ -818,8 +813,6 @@ impl Device {
             cube_face: None,
             info: dst_info,
         };*/
-        println!("src_id={:?} src_info={:?}", src, src_info);
-        println!("dst_id={:?} dst_info={:?}", dst_id, dst_info);
         self.encoder.copy_texture_to_texture_raw(
             &src_tex, None, src_info,
             &dst_tex.handle.raw(), None, dst_info).unwrap();
@@ -856,7 +849,6 @@ impl Device {
     #[cfg(all(target_os = "windows", feature="dx11"))]
     pub fn flush(&mut self) {
         for texture_id in self.image_batch_set.clone() {
-            println!("flush batched image {:?}", texture_id);
             let (width, height, data) = {
                 let texture = self.image_textures.get(&texture_id).expect("Didn't find texture!");
                 let (w, h) = texture.get_size();
@@ -906,9 +898,6 @@ fn batch_image_texture_data(texture: &mut ImageTexture<Rgba8>,
     width: usize, height: usize,
     data_pitch: usize, new_data: &[u8])
 {
-    println!("batch_texture_data");
-    println!("x0={:?} y0={:?} width={:?} height={:?} data_pitch={:?} new_data.len={:?}",
-              x_offset, y_offset, width, height, data_pitch, new_data.len());
     for j in 0..height {
         for i in 0..width {
             let offset = (j+y_offset)*data_pitch + (i + x_offset)*RGBA_STRIDE;

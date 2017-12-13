@@ -570,26 +570,22 @@ impl SourceTextureResolver {
         match *texture_id {
             SourceTexture::Invalid => {}
             SourceTexture::CacheA8 => {
-                println!("cache_a8_texture={:?} sampler={:?}", self.cache_a8_texture, sampler);
                 let texture = self.cache_a8_texture
                     .unwrap_or(self.dummy_cache_a8_texture);
                 device.bind_texture(sampler, texture, TextureStorage::CacheA8);
             }
             SourceTexture::CacheRGBA8 => {
-                println!("cache_rgba8_texture={:?} sampler={:?}", self.cache_rgba8_texture, sampler);
                 let texture = self.cache_rgba8_texture
                     .unwrap_or(self.dummy_cache_rgba8_texture);
                 device.bind_texture(sampler, texture, TextureStorage::CacheRGBA8);
             }
             SourceTexture::External(external_image) => {
-                println!("!!!!EXTERNAL IMAGE!!!!");
                 /*let texture = self.external_images
                     .get(&(external_image.id, external_image.channel_index))
                     .expect("BUG: External image should be resolved by now!");
                 device.bind_external_texture(sampler, texture);*/
             }
             SourceTexture::TextureCache(index) => {
-                println!("cache_texture_map={:?} sampler={:?}", self.cache_texture_map[index.0], sampler);
                 let texture = self.cache_texture_map[index.0];
                 device.bind_texture(sampler, texture, TextureStorage::Image);
             }
@@ -1334,10 +1330,6 @@ impl Renderer {
         // gracefully fail now than panic as soon as a texture is allocated.
         let min_texture_size = 512;
         if device_max_size < min_texture_size {
-            println!(
-                "Device reporting insufficient max texture size ({})",
-                device_max_size
-            );
             return Err(RendererError::MaxTextureSize);
         }
         let max_device_size = cmp::max(
@@ -2007,12 +1999,10 @@ impl Renderer {
                     BrushBatchKind::Image(target_kind) => {
                         let shader = match target_kind {
                             RenderTargetKind::Alpha => {
-                                println!("brush_image_a8");
                                 let brush_image_a8 = self.brush_image_a8.get_or_insert(create_brush_programs(&mut self.device, "brush_image_alpha_target"));
                                 brush_image_a8.get(key.blend_mode)
                             },
                             RenderTargetKind::Color => {
-                                println!("brush_image_rgba8");
                                 let brush_image_rgba8 = self.brush_image_rgba8.get_or_insert(create_brush_programs(&mut self.device, "brush_image_color_target"));
                                 brush_image_rgba8.get(key.blend_mode)
                             },
@@ -2232,7 +2222,6 @@ impl Renderer {
         //           blur radii with fixed weights.
         if !target.vertical_blurs.is_empty() || !target.horizontal_blurs.is_empty() {
             let _gm = self.gpu_profile.add_marker(GPU_TAG_BLUR);
-            println!("cs_blur_rgba8");
             let cs_blur_rgba8 = self.cs_blur_rgba8.get_or_insert(create_blur_program(&mut self.device, "cs_blur_rgba8"));
             if !target.vertical_blurs.is_empty() {
                 cs_blur_rgba8.bind(&mut self.device, projection, &target.vertical_blurs, render_target, &mut self.renderer_errors, 0);
@@ -2253,10 +2242,8 @@ impl Renderer {
         // to multiple tiles in the normal text run case.
         if !target.text_run_cache_prims.is_empty() {
             let _gm = self.gpu_profile.add_marker(GPU_TAG_CACHE_TEXT_RUN);
-            println!("cs_text_run");
 
             for (texture_id, instances) in &target.text_run_cache_prims {
-                println!("cs_text_run texture_id={:?}", texture_id);
                 self.texture_resolver.bind(&texture_id, TextureSampler::Color0, &mut self.device);
                 let cs_text_run = self.cs_text_run.get_or_insert(create_program(&mut self.device, "cs_text_run"));
                 cs_text_run.bind(&mut self.device, projection, &instances, render_target, &mut self.renderer_errors, 0);
@@ -2264,7 +2251,6 @@ impl Renderer {
             }
         }
         if !target.line_cache_prims.is_empty() {
-            println!("cs_line");
             let cs_line = self.cs_line.get_or_insert(create_program(&mut self.device, "cs_line"));
             cs_line.bind(&mut self.device, projection, &target.line_cache_prims, render_target, &mut self.renderer_errors, 0);
             cs_line.draw(&mut self.device, &BlendMode::Alpha, false);
@@ -2274,7 +2260,6 @@ impl Renderer {
 
         if !target.alpha_batcher.is_empty() {
             let _gm2 = GpuMarker::new("alpha batches");
-            println!("alpha batches");
 
             self.gpu_profile.add_sampler(GPU_SAMPLER_TAG_OPAQUE);
 
@@ -2540,7 +2525,6 @@ impl Renderer {
         //           blur radii with fixed weights.
         if !target.vertical_blurs.is_empty() || !target.horizontal_blurs.is_empty() {
             let _gm = self.gpu_profile.add_marker(GPU_TAG_BLUR);
-            println!("cs_blur_a8");
 
             let cs_blur_a8 = self.cs_blur_a8.get_or_insert(create_blur_program(&mut self.device, "cs_blur_a8"));
             if !target.vertical_blurs.is_empty() {
@@ -2555,7 +2539,6 @@ impl Renderer {
         }
 
         if !target.rect_cache_prims.is_empty() {
-            println!("brush_mask");
             let _gm = self.gpu_profile.add_marker(GPU_TAG_BRUSH_MASK);
             let brush_mask = self.brush_mask.get_or_insert(create_brush_programs(&mut self.device, "brush_mask"));
             let shader = brush_mask.get(BlendMode::None);
@@ -2573,7 +2556,6 @@ impl Renderer {
             // in regions below.
             if !target.clip_batcher.border_clears.is_empty() {
                 let _gm2 = GpuMarker::new("clip borders [clear]");
-                println!("cs_clip_border clears");
                 let cs_clip_border = self.cs_clip_border.get_or_insert(create_clip_program(&mut self.device, "cs_clip_border_transform"));
                 cs_clip_border.bind(&mut self.device, projection, &target.clip_batcher.border_clears, render_target.0, &mut self.renderer_errors, 0);
                 self.profile_counters.vertices.add(6 * &target.clip_batcher.border_clears.len());
@@ -2583,7 +2565,6 @@ impl Renderer {
             // Draw any dots or dashes for border corners.
             if !target.clip_batcher.borders.is_empty() {
                 let _gm2 = GpuMarker::new("clip borders");
-                println!("cs_clip_border");
                 // We are masking in parts of the corner (dots or dashes) here.
                 // Blend mode is set to max to allow drawing multiple dots.
                 // The individual dots and dashes in a border never overlap, so using
@@ -2600,7 +2581,6 @@ impl Renderer {
             // draw rounded cornered rectangles
             if !target.clip_batcher.rectangles.is_empty() {
                 let _gm2 = GpuMarker::new("clip rectangles");
-                println!("clip rectangles");
                 let cs_clip_rectangle = self.cs_clip_rectangle.get_or_insert(create_clip_program(&mut self.device, "cs_clip_rectangle_transform"));
                 cs_clip_rectangle.bind(&mut self.device, projection, &target.clip_batcher.rectangles, render_target.0, &mut self.renderer_errors, 0);
                 self.profile_counters.vertices.add(6 * &target.clip_batcher.rectangles.len());
@@ -2610,7 +2590,6 @@ impl Renderer {
             // draw image masks
             for (mask_texture_id, items) in target.clip_batcher.images.iter() {
                 let _gm2 = GpuMarker::new("clip images");
-                println!("clip images");
                 self.texture_resolver.bind(&mask_texture_id, TextureSampler::Color0, &mut self.device);
                 let cs_clip_image = self.cs_clip_image.get_or_insert(create_clip_program(&mut self.device, "cs_clip_image_transform"));
                 cs_clip_image.bind(&mut self.device, projection, &items, render_target.0, &mut self.renderer_errors, 0);
